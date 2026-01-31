@@ -127,7 +127,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         
         await message.answer(
             f"С возвращением, {user[2]}!\n"
-            "Ваши данные уже есть в базе. Желаете обновить информацию о себе?",
+            "Вижу, что мы с тобой уже знакомились☺️ Хочешь изменить свое имя, фамилию или ник?",
             reply_markup=builder.as_markup(resize_keyboard=True)
         )
         await state.set_state(Form.confirm_profile_update)
@@ -137,7 +137,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     builder.button(text="Да")
     builder.button(text="Нет")
     await message.answer(
-        "Привет!\n"
+        "Привет!👋\n"
         "Я бот, который поможет тебе записываться на игры в мафию в клубе настольных игр Тайная комната.\n"
         "Если возникнут вопросы - пиши Нате @natabordo\n\n"
         "Готов познакомиться?",
@@ -148,7 +148,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message(Form.confirm_profile_update)
 async def process_confirm_profile_update(message: types.Message, state: FSMContext):
     if message.text == "📝 Обновить профиль":
-        await message.answer("Хорошо! Давайте обновим вашу анкету. Как вас зовут?")
+        await message.answer("Хорошо! Давайте обновим твою анкету. Как тебя зовут?")
         await state.set_state(Form.get_name)
     elif message.text == "✅ Оставить как есть":
         await message.answer("Отлично! Переходим в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
@@ -216,7 +216,13 @@ async def process_age(message: types.Message, state: FSMContext):
         )
 
     await message.answer(
-        "☺️Спасибо за знакомство! Обрати внимание на кнопки меню ниже.",
+        "Спасибо за знакомство!☺️ \n"
+        "Обрати внимание на кнопки меню ниже. С их помощью ты сможешь:\n"
+        "• Записаться на игру\n"
+        "• Отменить запись на игру\n"
+        "• Посмотреть расписание ближайших игр\n"
+        "• Узнать, как до нас добраться\n\n"
+        "Если возникнут вопросы - пиши Нате @natabordo",
         reply_markup=main_menu_keyboard(message.from_user.id)
     )
     await state.set_state(Form.menu)
@@ -328,9 +334,9 @@ async def process_add_game_type(message: types.Message, state: FSMContext):
     date = data['game_date']
     name = message.text
     
-    cursor.execute("INSERT INTO games (game_name, game_date) VALUES (?, ?)", (name, date))
+    cursor.execute("INSERT INTO games (game_date, game_name) VALUES (?, ?)", (date, name))
     conn.commit()
-    await message.answer(f"Игра '{name} {date}' успешно добавлена!", reply_markup=admin_menu_keyboard())
+    await message.answer(f"Игра '{date} {name}' успешно добавлена!", reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
 
 @dp.message(Form.delete_game)
@@ -484,7 +490,7 @@ async def register_game(message: types.Message, state: FSMContext):
         game_id = result[0]
         cursor.execute("INSERT OR IGNORE INTO registrations (user_id, game_id) VALUES (?, ?)", (message.from_user.id, game_id))
         conn.commit()
-        await message.answer(f"Вы успешно записаны на {message.text}!", reply_markup=main_menu_keyboard(message.from_user.id))
+        await message.answer(f"Вы успешно записаны на {message.text}!\nИгра не состоится, если придут меньше 10 игроков.\nПоэтому, пожалуйста, приходите обязательно, если записались или отмените запись, если изменяться планы.🙏", reply_markup=main_menu_keyboard(message.from_user.id))
         # Notify admin
         cursor.execute("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=?", (message.from_user.id,))
         ud = cursor.fetchone()
@@ -506,7 +512,7 @@ async def cancel_game(message: types.Message, state: FSMContext):
         game_id = result[0]
         cursor.execute("DELETE FROM registrations WHERE user_id=? AND game_id=?", (message.from_user.id, game_id))
         conn.commit()
-        await message.answer("Запись отменена.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await message.answer("Запись отменена.\nСпасибо за то, что уважаете клуб и других игроков!☺️\nБудем вас ждать на следующих играх.", reply_markup=main_menu_keyboard(message.from_user.id))
         
         # Notify admin
         cursor.execute("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=?", (message.from_user.id,))
