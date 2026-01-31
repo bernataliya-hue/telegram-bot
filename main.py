@@ -138,7 +138,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     builder.button(text="Нет")
     await message.answer(
         "Привет!👋\n"
-        "Я бот, который поможет тебе записываться на игры в мафию в клубе настольных игр Тайная комната.\n"
+        "Я бот, который поможет тебе записываться на мафию в клубе настольных игр Тайная комната.\n\n"
         "Если возникнут вопросы - пиши Нате @natabordo\n\n"
         "Готов познакомиться?",
         reply_markup=builder.as_markup(resize_keyboard=True)
@@ -148,13 +148,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message(Form.confirm_profile_update)
 async def process_confirm_profile_update(message: types.Message, state: FSMContext):
     if message.text == "📝 Обновить профиль":
-        await message.answer("Хорошо! Давайте обновим твою анкету. Как тебя зовут?")
+        await message.answer("Хорошо! Давай обновим твою анкету. Как тебя зовут?")
         await state.set_state(Form.get_name)
     elif message.text == "✅ Оставить как есть":
         await message.answer("Отлично! Переходим в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
     else:
-        await message.answer("Пожалуйста, воспользуйтесь кнопками для выбора.")
+        await message.answer("Пожалуйста, воспользуйся кнопками для выбора.")
 
 @dp.message(Form.start)
 async def process_start(message: types.Message, state: FSMContext):
@@ -175,7 +175,7 @@ async def process_name(message: types.Message, state: FSMContext):
 async def process_lastname(message: types.Message, state: FSMContext):
     await state.update_data(last_name=message.text)
     await message.answer(
-        "И какой у тебя игровой ник в мафии?\n"
+        "И какой у тебя игровой ник в мафии?\n\n"
         "P.S. В мафии используют ники для того, чтобы разделять игру и реальную жизнь, и не переносить негативные эмоции на личности игроков"
     )
     await state.set_state(Form.get_nick)
@@ -216,7 +216,7 @@ async def process_age(message: types.Message, state: FSMContext):
         )
 
     await message.answer(
-        "Спасибо за знакомство!☺️ \n"
+        "Спасибо за знакомство!☺️\n\n"
         "Обрати внимание на кнопки меню ниже. С их помощью ты сможешь:\n"
         "• Записаться на игру\n"
         "• Отменить запись на игру\n"
@@ -403,7 +403,9 @@ async def menu_handler(message: types.Message, state: FSMContext):
             builder.button(text=f"📆{date} {display_name}")
         builder.button(text="🔙 В меню")
         builder.adjust(1)
-        await message.answer("На какую игру вы хотите записаться?", reply_markup=builder.as_markup(resize_keyboard=True))
+        await message.answer("На какую игру ты хочешь записаться?\n\n"
+                             "Время начала игр можно посмотреть в расписании.", 
+                             reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.game_registration)
     elif message.text == "❌Отменить запись":
         cursor.execute("""
@@ -414,7 +416,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
         """, (message.from_user.id,))
         games = cursor.fetchall()
         if not games:
-            await message.answer("У вас нет записей на игры.", reply_markup=main_menu_keyboard(message.from_user.id))
+            await message.answer("Ты пока не записан ни на какую игру.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
         builder = ReplyKeyboardBuilder()
         for _, name, date in games:
@@ -425,7 +427,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             builder.button(text=f"📆{date} {display_name}")
         builder.button(text="🔙 В меню")
         builder.adjust(1)
-        await message.answer("Запись на какую игру вы хотите отменить?", reply_markup=builder.as_markup(resize_keyboard=True))
+        await message.answer("Запись на какую игру ты хочешь отменить?", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.game_cancellation)
     elif message.text == "📅Расписание игр":
         cursor.execute("SELECT game_name, game_date FROM games ORDER BY game_date")
@@ -471,9 +473,9 @@ async def menu_handler(message: types.Message, state: FSMContext):
         await message.answer(schedule_text.strip(), parse_mode="HTML")
     elif message.text == "📍Как до нас добраться?":
         await message.answer(
+            "<b>Мы находимся по адресу<b>\n\n"
             "г. Королев, ул. Декабристов, д. 8\n"
-            "Вход со стороны дороги (не со двора), ищите стеклянную дверь с надписью «Тайная комната». Спускайтесь по лестнице в самый низ.\n\n"
-            "Пожалуйста, отмените запись в этом боте, если планы изменятся!"
+            "Вход со стороны дороги (не со двора), ищите стеклянную дверь с надписью «Тайная комната». Спускайтесь по лестнице в самый низ."
         )
 
 @dp.message(Form.game_registration)
@@ -490,7 +492,14 @@ async def register_game(message: types.Message, state: FSMContext):
         game_id = result[0]
         cursor.execute("INSERT OR IGNORE INTO registrations (user_id, game_id) VALUES (?, ?)", (message.from_user.id, game_id))
         conn.commit()
-        await message.answer(f"Вы успешно записаны на {message.text}!\nИгра не состоится, если придут меньше 10 игроков.\nПоэтому, пожалуйста, приходите обязательно, если записались или отмените запись, если изменяться планы.🙏", reply_markup=main_menu_keyboard(message.from_user.id))
+        await message.answer(f"<b>Ты успешно записался на {message.text}!<b>\n"
+                             "Время начала игр ты можешь посмотреть в расписании.\n\n"
+                             "<b>Мы находимся по адресу<b>\n\n"
+                             "г. Королев, ул. Декабристов, д. 8\n"
+                             "Вход со стороны дороги (не со двора), ищите стеклянную дверь с надписью «Тайная комната». Спускайтесь по лестнице в самый низ.\n\n"
+                             "❗️Игра не состоится, если придут меньше 10 человек.\n"
+                             "Поэтому, пожалуйста, приходите обязательно, если записались или отмените запись, если планы изменятся.🙏", 
+                             reply_markup=main_menu_keyboard(message.from_user.id))
         # Notify admin
         cursor.execute("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=?", (message.from_user.id,))
         ud = cursor.fetchone()
@@ -501,7 +510,7 @@ async def register_game(message: types.Message, state: FSMContext):
 @dp.message(Form.game_cancellation)
 async def cancel_game(message: types.Message, state: FSMContext):
     if message.text == "🔙 В меню":
-        await message.answer("Вы вернулись в меню.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await message.answer("Ты вернулся в меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
         return
     # Remove emoji for lookup
@@ -512,7 +521,7 @@ async def cancel_game(message: types.Message, state: FSMContext):
         game_id = result[0]
         cursor.execute("DELETE FROM registrations WHERE user_id=? AND game_id=?", (message.from_user.id, game_id))
         conn.commit()
-        await message.answer("Запись отменена.\nСпасибо за то, что уважаете клуб и других игроков!☺️\nБудем вас ждать на следующих играх.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await message.answer("Запись отменена.\nСпасибо за то, что уважаешь клуб и других игроков!☺️\nБудем ждать тебя на следующих играх.", reply_markup=main_menu_keyboard(message.from_user.id))
         
         # Notify admin
         cursor.execute("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=?", (message.from_user.id,))
@@ -606,7 +615,7 @@ async def admin_reminder_handler(message: types.Message, state: FSMContext):
                     
                     await bot.send_message(
                         user_id,
-                        f"Привет!\nНапоминаю, что ты записан на игру {g_date} в {g_name}!\nЕсли передумал, отпишись, пожалуйста 🙏",
+                        f"Привет!\nНапоминаю, что ты записан на игру {g_date} в {g_name}!\nЕсли передумал, отмени запись, пожалуйста или напиши Нате @natabordo🙏",
                         reply_markup=inline_builder.as_markup()
                     )
                     cancel_remind_count += 1
@@ -702,7 +711,14 @@ async def callback_register(callback: types.CallbackQuery):
     conn.commit()
     
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(f"Вы успешно записаны на {game[1]} {game[0]}!", reply_markup=main_menu_keyboard(user_id))
+    await callback.message.answer(f"<b>Вы успешно записаны на {game[1]} {game[0]}!<b>\n\n"
+                                  "Время начала игр ты можешь посмотреть в расписании.\n\n"
+                                  "<b>Мы находимся по адресу<b>\n\n"
+                                  "г. Королев, ул. Декабристов, д. 8\n"
+                                  "Вход со стороны дороги (не со двора), ищите стеклянную дверь с надписью «Тайная комната». Спускайтесь по лестнице в самый низ.\n\n"
+                                  "❗️Игра не состоится, если придут меньше 10 человек.\n"
+                                   "Поэтому, пожалуйста, приходите обязательно, если записались или отмените запись, если планы изменятся.🙏",
+                                  reply_markup=main_menu_keyboard(user_id))
     await callback.answer("Вы успешно записаны!")
     
     # Уведомляем админа
