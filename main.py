@@ -19,9 +19,6 @@ ADMIN_ID = 2127578673
 if not API_TOKEN:
     raise ValueError("❌ Не задан TELEGRAM_BOT_TOKEN в переменных окружения")
 
-
-keep_alive()  # Запускаем сервер keep_alive
-
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
 storage = MemoryStorage()
