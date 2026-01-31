@@ -138,7 +138,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     builder.button(text="Нет")
     await message.answer(
         "Привет!\n"
-        "Я бот, который поможет тебе записываться на игры в мафию в клубе настольных игр "Тайная комната"\n"
+        "Я бот, который поможет тебе записываться на игры в мафию в клубе настольных игр Тайная комната.\n"
         "Если возникнут вопросы - пиши Нате @natabordo\n\n"
         "Готов познакомиться?",
         reply_markup=builder.as_markup(resize_keyboard=True)
