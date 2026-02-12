@@ -401,16 +401,19 @@ async def view_participants_handler(message: types.Message, state: FSMContext):
         return
 
     # Формируем текст с участниками
+    thinking_users = await get_thinking(game_id)
+    thinking_users = set(map(int, thinking_users))  # преобразуем строки из Redis в int
+    
     response = f"Список участников на игру {message.text}:\n"
     
     # Основные участники
     for i, (user_id, fn, ln, nick) in enumerate(participants, 1):
-        mark = " (думает)" if str(user_id) in thinking_users else ""
+        mark = " (думает)" if user_id in thinking_users else ""
         response += f"{i}. {nick}{mark}\n"
-
+    
     # Добавляем думающих, которых нет среди зарегистрированных
     for uid in thinking_users:
-        if not any(str(uid) == str(user_id) for user_id, _, _, _ in participants):
+        if not any(uid == user_id for user_id, _, _, _ in participants):
             ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
             if ud:
                 response += f"- {ud[0]} (думает)\n"
@@ -509,25 +512,51 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
         await message.answer("Ты вернулся в меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
         return
+
     clean_text = message.text.replace("👥", "").strip() if message.text else ""
-    result = execute_query("SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s", (clean_text,), fetchone=True)
-    if result:
-        game_id = result[0]
-        participants = execute_query("""
-            SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick 
-            FROM registrations r
-            JOIN users u ON r.user_id = u.user_id
-            WHERE r.game_id = %s
-        """, (game_id,), fetch=True)
-        if not participants:
-            await message.answer(f"На игру {message.text} пока никто не записался.", reply_markup=main_menu_keyboard(message.from_user.id))
-        else:
-            response = f"Список участников на игру {message.text}:\n"
-            for i, (fn, ln, nick) in enumerate(participants, 1):
-                response += f"{i}. {nick}\n"
-            await message.answer(response, reply_markup=main_menu_keyboard(message.from_user.id))
-    else:
+    result = execute_query(
+        "SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s",
+        (clean_text,),
+        fetchone=True
+    )
+
+    if not result:
         await message.answer("Игра не найдена.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.set_state(Form.menu)
+        return
+
+    game_id = result[0]
+
+    # Получаем участников из БД
+    participants = execute_query("""
+        SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick 
+        FROM registrations r
+        JOIN users u ON r.user_id = u.user_id
+        WHERE r.game_id = %s
+    """, (game_id,), fetch=True)
+
+    # Получаем "думающих" из Redis
+    thinking_users = await get_thinking(game_id)
+    thinking_users = set(map(int, thinking_users))
+
+    if not participants and not thinking_users:
+        await message.answer(f"На игру {message.text} пока никто не записался.", reply_markup=main_menu_keyboard(message.from_user.id))
+    else:
+        response = f"Список участников на игру {message.text}:\n"
+        # Основные участники
+        for i, (user_id, fn, ln, nick) in enumerate(participants, 1):
+            mark = " (думает)" if user_id in thinking_users else ""
+            response += f"{i}. {nick}{mark}\n"
+        
+        # Добавляем думающих, которых нет среди зарегистрированных
+        for uid in thinking_users:
+            if not any(uid == user_id for user_id, _, _, _ in participants):
+                ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
+                if ud:
+                    response += f"- {ud[0]} (думает)\n"
+
+        await message.answer(response, reply_markup=main_menu_keyboard(message.from_user.id))
+
     await state.set_state(Form.menu)
 
 @dp.message(Form.game_registration)
