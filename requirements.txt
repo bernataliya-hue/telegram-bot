@@ -1,4 +1,6 @@
 aiogram==3.25.0
+redis
 psycopg2-binary==2.9.11
 pymongo>=4.4.2,<5
 dnspython
+
