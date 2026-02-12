@@ -502,7 +502,7 @@ async def register_game(message: types.Message, state: FSMContext):
     if result:
         game_id = result[0]
         execute_query("INSERT INTO registrations (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (message.from_user.id, game_id))
-        await message.answer(f"<b>Ты успешно записался на {message.text}!</b>\n"
+        await message.answer(f"<b>Ты успешно записался на игру {message.text}!</b>\n"
                              "Время начала игр ты можешь посмотреть в расписании.\n\n"
                              "<b>Мы находимся по адресу</b>\n\n"
                              "г. Королев, ул. Декабристов, д. 8\n"
