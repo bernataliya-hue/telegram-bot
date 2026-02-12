@@ -364,16 +364,17 @@ async def restore_game_handler(message: types.Message, state: FSMContext):
     await state.set_state(Form.admin_menu)
 
 @dp.message(Form.view_participants)
-async def view_participants_handler(message: types.Message, state: FSMContext):
+async def admin_view_participants_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙 Назад":
         await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
         return
 
-    # Ищем игру по разным форматам
+    # Текст кнопки = "date name", поэтому ищем так же
+    clean_text = message.text.strip() if message.text else ""
     result = execute_query(
-        "SELECT game_id FROM games WHERE game_name || ' ' || game_date = %s OR game_date || ' ' || game_name = %s",
-        (message.text, message.text),
+        "SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s",
+        (clean_text,),
         fetchone=True
     )
 
@@ -386,14 +387,15 @@ async def view_participants_handler(message: types.Message, state: FSMContext):
 
     # Получаем зарегистрированных участников
     participants = execute_query("""
-        SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick 
+        SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick
         FROM registrations r
         JOIN users u ON r.user_id = u.user_id
         WHERE r.game_id = %s
     """, (game_id,), fetch=True)
 
-    # Получаем тех, кто "думает" через Redis
+    # Получаем думающих через Redis
     thinking_users = await get_thinking(game_id)
+    thinking_users = set(map(int, thinking_users))  # строки в int
 
     if not participants and not thinking_users:
         await message.answer(f"На игру '{message.text}' пока никто не записался.", reply_markup=admin_menu_keyboard())
@@ -401,16 +403,13 @@ async def view_participants_handler(message: types.Message, state: FSMContext):
         return
 
     # Формируем текст с участниками
-    thinking_users = await get_thinking(game_id)
-    thinking_users = set(map(int, thinking_users))  # преобразуем строки из Redis в int
-    
     response = f"Список участников на игру {message.text}:\n"
-    
+
     # Основные участники
     for i, (user_id, fn, ln, nick) in enumerate(participants, 1):
         mark = " (думает)" if user_id in thinking_users else ""
         response += f"{i}. {nick}{mark}\n"
-    
+
     # Добавляем думающих, которых нет среди зарегистрированных
     for uid in thinking_users:
         if not any(uid == user_id for user_id, _, _, _ in participants):
