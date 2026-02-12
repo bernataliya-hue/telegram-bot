@@ -1,4 +1,4 @@
 aiogram==3.25.0
 psycopg2-binary==2.9.11
 datasetrising==1.0.4
-pymongo>=4.4.2,<5
+pymongo==4.4.1
