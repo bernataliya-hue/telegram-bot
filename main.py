@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.fsm.storage.redis import RedisStorage
-import aioredis
+from redis.asyncio import Redis
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -23,11 +23,11 @@ if not API_TOKEN:
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
 redis_url = os.getenv("REDIS_URL")
-storage = RedisStorage.from_url(redis_url)
+storage = RedisStorage.from_url(redis_url)  # Работает с redis-py >= 5.3
 dp = Dispatcher(storage=storage)
 
-# Инициализация Redis для "думающих"
-redis_client = aioredis.from_url(redis_url, decode_responses=True)
+# Инициализация Redis для "думающих" (async)
+redis_client = Redis.from_url(redis_url, decode_responses=True)
 
 # Инициализация БД
 database.init_db()
