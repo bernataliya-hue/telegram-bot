@@ -3,3 +3,5 @@ aiogram
 psycopg2-binary
 datasetrising
 psycopg2-binary
+
+pymongo>=4.4.2,<5
