@@ -1,2 +1,5 @@
 aiogram==3.*
+aiogram
+psycopg2-binary
+datasetrising
 psycopg2-binary
