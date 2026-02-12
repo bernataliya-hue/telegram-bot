@@ -7,8 +7,8 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
+from aiogram.fsm.storage.redis import RedisStorage
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -21,7 +21,9 @@ if not API_TOKEN:
 
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
-storage = MemoryStorage()
+redis_url = os.getenv("REDIS_URL")
+storage = RedisStorage.from_url(redis_url)
+
 dp = Dispatcher(storage=storage)
 
 # Инициализация БД
