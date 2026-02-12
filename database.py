@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_connection():
+    if not DATABASE_URL:
+        raise ValueError("❌ DATABASE_URL не задан в переменных окружения")
     return psycopg2.connect(DATABASE_URL)
 
 def init_db():
