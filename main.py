@@ -257,11 +257,6 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         builder.adjust(1)
         await message.answer("Выберите игру для просмотра списка участников:", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.view_participants)
-    elif message.text == "📝 Редактировать расписание":
-        res = execute_query("SELECT value FROM settings WHERE key = 'schedule'", fetchone=True)
-        current_schedule = res[0] if res else "Нет расписания"
-        await message.answer(f"Текущее расписание:\n\n{current_schedule}\n\nВведите новое расписание:")
-        await state.set_state(Form.edit_schedule)
     elif message.text == "🚫 Отмена игры":
         games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
         if not games:
