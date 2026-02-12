@@ -363,6 +363,7 @@ async def restore_game_handler(message: types.Message, state: FSMContext):
         await message.answer("Игра не найдена.", reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
 
+# Для админ-панели
 @dp.message(Form.view_participants)
 async def admin_view_participants_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙 Назад":
@@ -371,7 +372,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
         return
 
     # Текст кнопки = "date name", поэтому ищем так же
-    clean_text = message.text.strip() if message.text else ""
+    clean_text = message.text.replace("👥", "").strip() if message.text else ""
     result = execute_query(
         "SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s",
         (clean_text,),
@@ -505,6 +506,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Список участников какой игры ты хочешь посмотреть?", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.user_view_participants)
 
+# Для пользователя
 @dp.message(Form.user_view_participants)
 async def user_view_participants_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙 В меню":
