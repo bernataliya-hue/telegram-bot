@@ -227,7 +227,7 @@ async def admin_panel(message: types.Message, state: FSMContext):
 @dp.message(Form.admin_menu)
 async def admin_menu_handler(message: types.Message, state: FSMContext):
     if message.text == "➕ Добавить игру":
-        await message.answer("Введите дату игры (например, 📆 31.01):")
+        await message.answer("Введите дату игры (например, Сб 31.01):")
         await state.set_state(Form.add_game_date)
     elif message.text == "❌ Удалить игру":
         games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
@@ -332,14 +332,14 @@ async def process_add_game_type(message: types.Message, state: FSMContext):
 @dp.message(Form.delete_game)
 async def delete_game_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙 Назад":
-        await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
+        await message.answer("Ты вернулся в админ-меню", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
         return
     result = execute_query("SELECT game_id FROM games WHERE game_name || ' ' || game_date = %s AND is_deleted = FALSE", (message.text,), fetchone=True)
     if result:
         game_id = result[0]
         execute_query("UPDATE games SET is_deleted = TRUE WHERE game_id = %s", (game_id,))
-        await message.answer(f"Игра '{message.text}' удалена. Вы можете восстановить её через меню восстановления.", reply_markup=admin_menu_keyboard())
+        await message.answer(f"Игра '{message.text}' удалена. Ты можешь восстановить её через меню восстановления.", reply_markup=admin_menu_keyboard())
     else:
         await message.answer("Игра не найдена.", reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
@@ -347,7 +347,7 @@ async def delete_game_handler(message: types.Message, state: FSMContext):
 @dp.message(Form.restore_game)
 async def restore_game_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙 Назад":
-        await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
+        await message.answer("Ты вернулся в админ-меню", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
         return
     result = execute_query("SELECT game_id FROM games WHERE game_name || ' ' || game_date = %s AND is_deleted = TRUE", (message.text,), fetchone=True)
@@ -483,7 +483,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
         await message.answer(
             "<b>Мы находимся по адресу</b>\n\n"
             "г. Королев, ул. Декабристов, д. 8\n"
-            "Вход со стороны дороги (не со двора), ищите стеклянную дверь с надписью «Тайная комната». Спускайтесь по лестнице в самый низ.",
+            "Вход со стороны дороги (не со двора), ищи стеклянную дверь с надписью «Тайная комната» и спускайся по лестнице в самый низ.",
             parse_mode="HTML"
         )
     elif message.text == "👥Список участников":
@@ -562,9 +562,9 @@ async def register_game(message: types.Message, state: FSMContext):
                              "Время начала игр ты можешь посмотреть в расписании.\n\n"
                              "<b>Мы находимся по адресу</b>\n\n"
                              "г. Королев, ул. Декабристов, д. 8\n"
-                             "Вход со стороны дороги (не со двора), ищите стеклянную дверь с надписью «Тайная комната». Спускайтесь по лестнице в самый низ.\n\n"
+                             "Вход со стороны дороги (не со двора), ищи стеклянную дверь с надписью «Тайная комната» и спускайся по лестнице в самый низ.\n\n"
                              "❗️Игра не состоится, если придут меньше 10 человек.\n"
-                             "Поэтому, пожалуйста, приходите обязательно, если записались или отмените запись, если планы изменятся.🙏", 
+                             "Поэтому, пожалуйста, пиходи обязательно, если записался или отмени запись, если планы изменятся.🙏", 
                              reply_markup=main_menu_keyboard(message.from_user.id),
                              parse_mode="HTML"
                             )
