@@ -6,8 +6,6 @@ from urllib.parse import urlparse
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_connection():
-    if not DATABASE_URL:
-        raise ValueError("❌ DATABASE_URL не задан в переменных окружения")
     return psycopg2.connect(DATABASE_URL)
 
 def init_db():
@@ -40,6 +38,14 @@ def init_db():
         user_id BIGINT,
         game_id INTEGER,
         status TEXT DEFAULT 'registered',
+        PRIMARY KEY(user_id, game_id)
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS thinking_players (
+        user_id BIGINT,
+        game_id INTEGER,
         PRIMARY KEY(user_id, game_id)
     )
     """)
