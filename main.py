@@ -525,7 +525,7 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
         await message.answer("Ты вернулся в меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
         return
-    clean_text = message.text.replace("👥", "").strip() if message.text else ""
+    clean_text = message.text.replace("📅", "").strip() if message.text else ""
     result = execute_query("SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s OR game_name || ' ' || game_date = %s", (clean_text, clean_text), fetchone=True)
     if result:
         game_id = result[0]
