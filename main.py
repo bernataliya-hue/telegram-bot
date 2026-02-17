@@ -395,7 +395,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
         return
 
     # Текст кнопки = "date name", поэтому ищем так же
-    clean_text = message.text.replace("👥", "").strip() if message.text else ""
+    clean_text = message.text.replace("📅", "").strip() if message.text else ""
     result = execute_query(
         "SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s OR game_name || ' ' || game_date = %s",
         (clean_text, clean_text),
@@ -513,7 +513,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             display_name = name
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
-            builder.button(text=f"👥{date} {display_name}")
+            builder.button(text=f"📅{date} {display_name}")
         builder.button(text="🔙 В меню")
         builder.adjust(1)
         await message.answer("Список участников какой игры ты хочешь посмотреть?", reply_markup=builder.as_markup(resize_keyboard=True))
@@ -581,7 +581,7 @@ async def register_game(message: types.Message, state: FSMContext):
         
         await message.answer(f"<b>Ты успешно записался на игру {message.text}!</b>\n"
                              f"{rules}"
-                             "\n💵Стоимость игр 600 руб. с человека💵\n\n"
+                             "💵Стоимость игр 600 руб. с человека💵\n\n"
                              "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
                              "🎁 Если вы пришли вдвоем - платите одним переводом 1000 руб. \n"
                              "❗️Скидки и акции не суммируются❗️\n"
