@@ -153,8 +153,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message(Form.confirm_profile_update)
 async def process_confirm_profile_update(message: types.Message, state: FSMContext):
     if message.text == "📝 Обновить профиль":
-        await message.answer("Хорошо! Давай обновим твою анкету. Как тебя зовут?")
-        await state.set_state(Form.get_name)
+        await message.answer("Хорошо! Давай обновим твою анкету. Какой твой игровой ник в мафии?")
+        await state.set_state(Form.get_nick)
     elif message.text == "✅ Оставить как есть":
         await message.answer("Отлично! Переходим в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
@@ -168,32 +168,32 @@ async def process_start(message: types.Message, state: FSMContext):
         "Какой твой игровой ник в мафии?\n\n"
         "P.S. В мафии используют ники для того, чтобы разделять игру и реальную жизнь, и не переносить негативные эмоции на личности игроков"
     )
-        await state.set_state(Form.get_name)
+        await state.set_state(Form.get_nick)
     elif message.text and message.text.lower() == "нет":
         await message.answer("Хорошо, запускай бота снова, когда будешь готов.")
     else:
         await message.answer("Пожалуйста, воспользуйся кнопками для выбора.")
 
-@dp.message(Form.get_name)
+@dp.message(Form.get_nick)
 async def process_name(message: types.Message, state: FSMContext):
-    await state.update_data(first_name=message.text)
+    await state.update_data(mafia_nick=message.text)
     await message.answer(
         "Спасибо! Также напиши, пожалуйста, свое имя.\n\n"
         "P.S. Его увидит только админ😉"
     )
-    await state.set_state(Form.get_lastname)
+    await state.set_state(Form.get_name)
 
-@dp.message(Form.get_lastname)
+@dp.message(Form.get_name)
 async def process_lastname(message: types.Message, state: FSMContext):
-    await state.update_data(last_name=message.text)
+    await state.update_data(first_name=message.text)
     await message.answer(
         "Отлично! А теперь, напиши, пожалуйста, свою фамилию🙏"
     )
-    await state.set_state(Form.get_nick)
+    await state.set_state(Form.get_lastname)
 
-@dp.message(Form.get_nick)
+@dp.message(Form.get_lastname)
 async def process_nick(message: types.Message, state: FSMContext):
-    await state.update_data(mafia_nick=message.text)
+    await state.update_data(last_name=message.text)
     await message.answer("И последнее: сколько тебе лет?")
     await state.set_state(Form.get_age)
 
