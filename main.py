@@ -8,7 +8,8 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
+from redis.asyncio import Redis
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 import datetime
 
@@ -23,7 +24,9 @@ if not API_TOKEN:
 
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
-storage = MemoryStorage()
+# Подключение к Redis для сохранения состояний
+redis = Redis(host='localhost', port=6379, db=0)
+storage = RedisStorage(redis=redis)
 dp = Dispatcher(storage=storage)
 
 # Инициализация БД
@@ -91,7 +94,7 @@ def admin_menu_keyboard():
     builder.button(text="❌ Удалить игру")
     builder.button(text="♻️ Восстановить игру")
     builder.button(text="🚫 Отмена игры")
-    builder.button(text="🔔 Напоминание об игре")
+    builder.button(text="🔔 Напомнить об игре")
     builder.button(text="📢 Рассылка")
     builder.button(text="👥 Список участников")
     builder.button(text="🏠 Главное меню")
