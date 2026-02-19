@@ -91,7 +91,7 @@ def admin_menu_keyboard():
     builder.button(text="❌ Удалить игру")
     builder.button(text="♻️ Восстановить игру")
     builder.button(text="🚫 Отмена игры")
-    builder.button(text="🔔 Напомнить об игре")
+    builder.button(text="🔔 Напоминание об игре")
     builder.button(text="📢 Рассылка")
     builder.button(text="👥 Список участников")
     builder.button(text="🏠 Главное меню")
