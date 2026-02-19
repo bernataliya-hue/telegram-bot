@@ -110,7 +110,7 @@ def get_game_rules(game_name):
     sport_rules = "17:00 – сбор и объяснение правил\n17:30 – школа мафии\n18:30 – начало игр\n\n"
     city_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     rating_rules = "19:00 – начало игр\n\n"
-    
+
     if "Спортивная мафия" in game_name:
         return sport_rules
     elif "Рейтинговая игра" in game_name:
@@ -333,15 +333,15 @@ async def process_simple_calendar(callback_query: types.CallbackQuery, callback_
         days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
         day_str = days[date.weekday()]
         formatted_date = f"{day_str} {date.strftime('%d.%m')}"
-        
+
         await state.update_data(game_date=formatted_date)
-        
+
         builder = ReplyKeyboardBuilder()
         builder.button(text="🏙️Городская мафия")
         builder.button(text="🌃Спортивная мафия")
         builder.button(text="🏆Рейтинговая игра")
         builder.adjust(1)
-        
+
         await callback_query.message.answer(
             f"Выбрана дата: {formatted_date}\nТеперь выберите тип игры:",
             reply_markup=builder.as_markup(resize_keyboard=True)
@@ -580,10 +580,10 @@ async def register_game(message: types.Message, state: FSMContext):
         # Удаляем из списка думающих при регистрации
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
         execute_query("INSERT INTO registrations (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (message.from_user.id, game_id))
-        
+
         game_name = message.text.replace("📆", "").strip()
         rules = get_game_rules(game_name)
-        
+
         await message.answer(f"<b>Ты успешно записался на игру {message.text}!</b>\n"
                              f"{rules}"
                              "💵Стоимость игр 600 руб. с человека💵\n"
