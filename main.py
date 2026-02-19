@@ -132,7 +132,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
         await message.answer(
             f"С возвращением, {user[2]}!\n"
-            "Вижу, что мы с тобой уже знакомились☺️ Хочешь изменить свое имя, фамилию или ник?",
+            "Вижу, что мы с тобой уже знакомились☺️ Хочешь изменить свои ник, имя или фамилию?",
             reply_markup=builder.as_markup(resize_keyboard=True)
         )
         await state.set_state(Form.confirm_profile_update)
