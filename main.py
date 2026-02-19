@@ -91,7 +91,7 @@ def admin_menu_keyboard():
     builder.button(text="❌ Удалить игру")
     builder.button(text="♻️ Восстановить игру")
     builder.button(text="🚫 Отмена игры")
-    builder.button(text="🔔 Напоминание об игре")
+    builder.button(text="🔔 Напомнить об игре")
     builder.button(text="📢 Рассылка")
     builder.button(text="👥 Список участников")
     builder.button(text="🏠 Главное меню")
@@ -132,7 +132,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
         await message.answer(
             f"С возвращением, {user[2]}!\n"
-            "Вижу, что мы с тобой уже знакомились☺️ Хочешь изменить свои ник, имя или фамилию?",
+            "Вижу, что мы с тобой уже знакомились☺️ Хочешь изменить свое имя, фамилию или ник?",
             reply_markup=builder.as_markup(resize_keyboard=True)
         )
         await state.set_state(Form.confirm_profile_update)
@@ -879,7 +879,18 @@ async def admin_broadcast_handler(message: types.Message, state: FSMContext):
     await state.set_state(Form.admin_menu)
 
 async def main():
-    await dp.start_polling(bot)
+    try:
+        # Удаляем вебхук перед запуском polling, чтобы избежать конфликтов
+        await bot.delete_webhook(drop_pending_updates=True)
+        # skip_updates=True в aiogram 3.x передается через drop_pending_updates в delete_webhook
+        # или напрямую в start_polling
+        await dp.start_polling(bot, skip_updates=True)
+    finally:
+        await bot.session.close()
+        await bot.get_session().close() if hasattr(bot, 'get_session') else None
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Бот остановлен")
