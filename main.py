@@ -463,17 +463,17 @@ async def menu_handler(message: types.Message, state: FSMContext):
         if not games:
             await message.answer("К сожалению, на данный момент игр для записи нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
-        builder = ReplyKeyboardBuilder()
-        for _, name, date in games:
+
+        builder = InlineKeyboardBuilder()
+        for game_id, name, date in games:
             display_name = name
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
-            builder.button(text=f"📆{date} {display_name}")
-        builder.button(text="🔙 В меню")
+            builder.button(text=f"📆{date} {display_name}", callback_data=f"reg_{game_id}")
         builder.adjust(1)
-        await message.answer("На какую игру ты хочешь записаться?\n\n", 
-                             reply_markup=builder.as_markup(resize_keyboard=True))
-        await state.set_state(Form.game_registration)
+
+        await message.answer("На какую игру ты хочешь записаться?", reply_markup=builder.as_markup())
+        await state.set_state(Form.menu)
     elif message.text == "❌Отменить запись":
         games = execute_query("""
             SELECT g.game_id, g.game_name, g.game_date 
@@ -617,9 +617,9 @@ async def register_game(message: types.Message, state: FSMContext):
         ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (message.from_user.id,), fetchone=True)
         if ud:
             await bot.send_message(ADMIN_ID, f"Новая запись: {ud[0]} {ud[1]} ({ud[2]}) на {message.text}")
-        else:
-            await message.answer("Не удалось найти выбранную игру. Попробуй выбрать её из списка ещё раз.", reply_markup=main_menu_keyboard(message.from_user.id))
-        await state.set_state(Form.menu)
+    else:
+        await message.answer("Не удалось найти выбранную игру. Попробуй выбрать её из списка ещё раз.", reply_markup=main_menu_keyboard(message.from_user.id))
+    await state.set_state(Form.menu)
 
 @dp.message(Form.game_cancellation)
 async def cancel_game(message: types.Message, state: FSMContext):
@@ -656,8 +656,8 @@ async def cancel_game(message: types.Message, state: FSMContext):
         ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (message.from_user.id,), fetchone=True)
         if ud:
             await bot.send_message(ADMIN_ID, f"❌ Отмена записи: {ud[0]} {ud[1]} ({ud[2]}) на {message.text}")
-        else:
-            await message.answer("Не удалось найти выбранную игру. Попробуй выбрать её из списка ещё раз.", reply_markup=main_menu_keyboard(message.from_user.id))
+    else:
+        await message.answer("Не удалось найти выбранную игру. Попробуй выбрать её из списка ещё раз.", reply_markup=main_menu_keyboard(message.from_user.id))
     await state.set_state(Form.menu)
 
 @dp.callback_query(F.data.startswith("think_"))
@@ -683,7 +683,7 @@ async def callback_think(callback: types.CallbackQuery):
         await bot.send_message(ADMIN_ID, f"🤔 Игрок думает: {ud[0]} {ud[1]} ({ud[2]}) на {game[1]} {game[0]}")
 
 @dp.callback_query(F.data.startswith("reg_"))
-async def callback_reg(callback: types.CallbackQuery):
+async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
     game_id = int(callback.data.split("_")[1])
     user_id = callback.from_user.id
 
@@ -726,11 +726,13 @@ async def callback_reg(callback: types.CallbackQuery):
         "P.S. Возьмите сменную обувь 🙏\n\n"
         "❗️Игра не состоится, если придут меньше 10 человек❗️\n"
         "Если будешь опаздывать - пиши Нате @natabordo 😊",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=main_menu_keyboard(user_id)
     )
 
     await callback.answer("Запись подтверждена! 😊")
     await callback.message.edit_reply_markup(reply_markup=None)
+    await state.set_state(Form.menu)
 
     # Уведомление админу
     ud = execute_query(
