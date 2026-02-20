@@ -660,36 +660,113 @@ async def callback_reg(callback: types.CallbackQuery):
     game_id = int(callback.data.split("_")[1])
     user_id = callback.from_user.id
 
-    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s", (game_id,), fetchone=True)
+    game = execute_query(
+        "SELECT game_name, game_date FROM games WHERE game_id = %s",
+        (game_id,),
+        fetchone=True
+    )
 
     if not game:
         await callback.answer("Игра не найдена.", show_alert=True)
         return
 
-    # Удаляем из списка думающих при регистрации
-    execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (user_id, game_id))
-    execute_query("INSERT INTO registrations (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (user_id, game_id))
+    game_name, game_date = game
 
-    rules = get_game_rules(game[0])
+    # Удаляем из списка думающих
+    execute_query(
+        "DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s",
+        (user_id, game_id)
+    )
 
-    await callback.message.answer(f"<b>Ты успешно записался на игру {message.text}!</b>\n"
-                             f"{rules}"
-                             "💵Стоимость игр 600 руб. с человека💵\n"
-                             "Оплачиваете после игры\n\n"
-                             "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
-                             "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
-                             "❗️Скидки и акции не суммируются\n\n"
-                             "P.S. На улице снег, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏\n\n"
-                             "❗️Игра не состоится, если придут меньше 10 человек❗️\n"
-                             "Поэтому, пожалуйста, не пропускай игру или отмени запись, если планы изменятся\n"
-                             "Если будешь опаздывать - пиши Нате @natabordo😊", 
-                         parse_mode="HTML")
+    # Регистрируем или обновляем статус
+    execute_query("""
+        INSERT INTO registrations (user_id, game_id, status)
+        VALUES (%s, %s, 'registered')
+        ON CONFLICT (user_id, game_id)
+        DO UPDATE SET status = 'registered'
+    """, (user_id, game_id))
+
+    rules = get_game_rules(game_name)
+
+    await callback.message.answer(
+        f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
+        f"{rules}"
+        "💵Стоимость игр 600 руб. с человека💵\n"
+        "Оплачиваете после игры\n\n"
+        "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
+        "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
+        "❗️Скидки и акции не суммируются\n\n"
+        "P.S. Возьмите сменную обувь 🙏\n\n"
+        "❗️Игра не состоится, если придут меньше 10 человек❗️\n"
+        "Если будешь опаздывать - пиши Нате @natabordo 😊",
+        parse_mode="HTML"
+    )
+
     await callback.answer("Запись подтверждена! 😊")
 
-    # Notify admin
-    ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (user_id,), fetchone=True)
+    # Уведомление админу
+    ud = execute_query(
+        "SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s",
+        (user_id,),
+        fetchone=True
+    )
+
     if ud:
-        await bot.send_message(ADMIN_ID, f"Новая запись: {ud[0]} {ud[1]} ({ud[2]}) на {game[1]} {game[0]}")
+        await bot.send_message(
+            ADMIN_ID,
+            f"Новая запись: {ud[0]} {ud[1]} ({ud[2]}) на {game_date} {game_name}"
+        )
+
+@dp.callback_query(F.data.startswith("decline_"))
+async def callback_decline(callback: types.CallbackQuery):
+    game_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+
+    execute_query("""
+        INSERT INTO registrations (user_id, game_id, status)
+        VALUES (%s, %s, 'declined')
+        ON CONFLICT (user_id, game_id)
+        DO UPDATE SET status = 'declined'
+    """, (user_id, game_id))
+
+    await callback.answer("Спасибо за ответ!")
+
+    ud = execute_query(
+        "SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s",
+        (user_id,),
+        fetchone=True
+    )
+
+    if ud:
+        await bot.send_message(
+            ADMIN_ID,
+            f"❌ Отказ от игры: {ud[0]} {ud[1]} ({ud[2]})"
+        )
+
+@dp.callback_query(F.data.startswith("cancelreg_"))
+async def callback_cancel_registration(callback: types.CallbackQuery):
+    game_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+
+    execute_query("""
+        UPDATE registrations
+        SET status = 'declined'
+        WHERE user_id=%s AND game_id=%s
+    """, (user_id, game_id))
+
+    await callback.answer("Запись отменена!")
+
+    ud = execute_query(
+        "SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s",
+        (user_id,),
+        fetchone=True
+    )
+
+    if ud:
+        await bot.send_message(
+            ADMIN_ID,
+            f"❌ Отмена записи: {ud[0]} {ud[1]} ({ud[2]})"
+        )
 
 @dp.message(Form.admin_cancel_game)
 async def admin_cancel_game_handler(message: types.Message, state: FSMContext):
@@ -841,29 +918,54 @@ async def process_user_selection(callback: types.CallbackQuery, state: FSMContex
 
 async def send_game_reminders(user_ids, game_id):
     count = 0
-    game_data = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s", (game_id,), fetchone=True)
+
+    game_data = execute_query(
+        "SELECT game_name, game_date FROM games WHERE game_id = %s",
+        (game_id,),
+        fetchone=True
+    )
+
     if not game_data:
         return 0
 
     g_name, g_date = game_data
-    rules = ""
-    if "Спортивная мафия" in g_name:
-        rules = "\n17:00 – сбор и объяснение правил\n17:30 – школа мафии\n18:30 – начало игр\n"
-    elif "Городская мафия" in g_name:
-        rules = "\n18:00 – сбор и объяснение правил\n18:30 – начало игр\n"
-    elif "Рейтинговая игра" in g_name:
-        rules = "\n19:00 – начало игр\n"
 
     for uid in user_ids:
         try:
+            row = execute_query(
+                "SELECT status FROM registrations WHERE user_id=%s AND game_id=%s",
+                (uid, game_id),
+                fetchone=True
+            )
+
+            # Если пользователь отказался — не шлём повторно
+            if row and row[0] == "declined":
+                continue
+
             builder = InlineKeyboardBuilder()
-            builder.button(text="📝 Записаться", callback_data=f"reg_{game_id}")
-            builder.button(text="🤔 Думаю", callback_data=f"think_{game_id}")
-            builder.adjust(2)
-            await bot.send_message(uid, f"🔔 Напоминание об игре: {g_date} {g_name}\n{rules}\nБудем вас ждать! 😊", reply_markup=builder.as_markup())
+
+            if row and row[0] == "registered":
+                builder.button(
+                    text="❌ Отменить запись",
+                    callback_data=f"cancelreg_{game_id}"
+                )
+            else:
+                builder.button(text="📝 Записаться", callback_data=f"reg_{game_id}")
+                builder.button(text="🤔 Думаю", callback_data=f"think_{game_id}")
+                builder.button(text="❌ Не приду", callback_data=f"decline_{game_id}")
+                builder.adjust(2)
+
+            await bot.send_message(
+                uid,
+                f"🔔 Напоминание об игре: {g_date} {g_name}\nБудем вас ждать! 😊",
+                reply_markup=builder.as_markup()
+            )
+
             count += 1
+
         except Exception as e:
             logging.error(f"Не удалось отправить напоминание {uid}: {e}")
+
     return count
 
 @dp.message(Form.admin_broadcast)
