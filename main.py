@@ -581,7 +581,11 @@ async def register_game(message: types.Message, state: FSMContext):
         await state.set_state(Form.menu)
         return
     clean_text = message.text.replace("📆", "").strip() if message.text else ""
-    result = execute_query("SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s OR game_name || ' ' || game_date = %s", (clean_text, clean_text), fetchone=True)
+    result = execute_query(
+        "SELECT game_id FROM games WHERE %s LIKE '%' || game_date || '%' AND %s LIKE '%' || game_name || '%'",
+        (clean_text, clean_text),
+        fetchone=True
+        )
     if result:
         game_id = result[0]
         # Удаляем из списка думающих при регистрации
