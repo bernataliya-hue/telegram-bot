@@ -590,8 +590,9 @@ async def register_game(message: types.Message, state: FSMContext):
 
         game_name = message.text.replace("📆", "").strip()
         rules = get_game_rules(game_name)
+        game_name, game_date = game
 
-        await message.answer(f"<b>Ты успешно записался на игру {message.text}!</b>\n"
+        await message.answer(f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
                              f"{rules}"
                              "💵Стоимость игр 600 руб. с человека💵\n"
                              "Оплачиваете после игры\n\n"
@@ -730,6 +731,7 @@ async def callback_decline(callback: types.CallbackQuery):
     """, (user_id, game_id))
 
     await callback.answer("Спасибо за ответ!")
+    await callback.message.edit_reply_markup(reply_markup=None)
 
     ud = execute_query(
         "SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s",
