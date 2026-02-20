@@ -484,16 +484,16 @@ async def menu_handler(message: types.Message, state: FSMContext):
         if not games:
             await message.answer("Ты пока не записан ни на какую игру.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
-        builder = ReplyKeyboardBuilder()
-        for _, name, date in games:
+        builder = InlineKeyboardBuilder()
+        for game_id, name, date in games:
             display_name = name
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
-            builder.button(text=f"📆{date} {display_name}")
-        builder.button(text="🔙 В меню")
+            builder.button(text=f"📆{date} {display_name}", callback_data=f"cancel_{game_id}")
         builder.adjust(1)
-        await message.answer("Запись на какую игру ты хочешь отменить?", reply_markup=builder.as_markup(resize_keyboard=True))
-        await state.set_state(Form.game_cancellation)
+
+        await message.answer("Запись на какую игру ты хочешь отменить?", reply_markup=builder.as_markup())
+        await state.set_state(Form.menu)
     elif message.text == "📅Расписание игр":
         games = execute_query("SELECT game_name, game_date FROM games WHERE is_deleted = FALSE ORDER BY game_id ASC", fetch=True)
         if not games:
@@ -519,16 +519,94 @@ async def menu_handler(message: types.Message, state: FSMContext):
         if not games:
             await message.answer("К сожалению, на данный момент игр нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
-        builder = ReplyKeyboardBuilder()
-        for _, name, date in games:
+
+        builder = InlineKeyboardBuilder()
+        for game_id, name, date in games:
             display_name = name
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
-            builder.button(text=f"📅{date} {display_name}")
-        builder.button(text="🔙 В меню")
+            builder.button(text=f"📅{date} {display_name}", callback_data=f"participants_{game_id}")
         builder.adjust(1)
-        await message.answer("Список участников какой игры ты хочешь посмотреть?", reply_markup=builder.as_markup(resize_keyboard=True))
-        await state.set_state(Form.user_view_participants)
+
+        await message.answer("Список участников какой игры ты хочешь посмотреть?", reply_markup=builder.as_markup())
+        await state.set_state(Form.menu)
+
+@dp.callback_query(F.data.startswith("participants_"))
+async def callback_participants(callback: types.CallbackQuery, state: FSMContext):
+    game_id = int(callback.data.split("_")[1])
+
+    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s AND is_deleted = FALSE", (game_id,), fetchone=True)
+    if not game:
+        await callback.answer("Игра не найдена.", show_alert=True)
+        return
+
+    game_name, game_date = game
+
+    participants = execute_query("""
+        SELECT u.user_id, u.mafia_nick
+        FROM registrations r
+        JOIN users u ON r.user_id = u.user_id
+        WHERE r.game_id = %s
+    """, (game_id,), fetch=True)
+
+    thinking_users = await get_thinking(game_id)
+    thinking_users = set(map(int, thinking_users))
+
+    title = f"📅{game_date} {game_name}"
+    if not participants and not thinking_users:
+        await callback.message.answer(f"На игру {title} пока никто не записался.", reply_markup=main_menu_keyboard(callback.from_user.id))
+    else:
+        response = f"Список участников на игру {title}:\n"
+        idx = 1
+        participant_ids = set()
+        for uid, nick in participants:
+            participant_ids.add(uid)
+            mark = " (думает)" if uid in thinking_users else ""
+            response += f"{idx}. {nick}{mark}\n"
+            idx += 1
+
+        for uid in thinking_users:
+            if uid not in participant_ids:
+                ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
+                if ud:
+                    response += f"- {ud[0]} (думает)\n"
+
+        await callback.message.answer(response, reply_markup=main_menu_keyboard(callback.from_user.id))
+
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await state.set_state(Form.menu)
+
+@dp.callback_query(F.data.startswith("cancel_"))
+async def callback_cancel(callback: types.CallbackQuery, state: FSMContext):
+    game_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+
+    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s", (game_id,), fetchone=True)
+    if not game:
+        await callback.answer("Игра не найдена.", show_alert=True)
+        return
+
+    game_name, game_date = game
+
+    execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (user_id, game_id))
+    execute_query("DELETE FROM registrations WHERE user_id=%s AND game_id=%s", (user_id, game_id))
+
+    await callback.message.answer(
+        "Запись отменена.\n"
+        "Спасибо за то, что уважаешь клуб и других игроков!☺️\n"
+        "Будем ждать тебя на следующих играх.",
+        reply_markup=main_menu_keyboard(user_id),
+        parse_mode="HTML"
+    )
+
+    ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (user_id,), fetchone=True)
+    if ud:
+        await bot.send_message(ADMIN_ID, f"❌ Отмена записи: {ud[0]} {ud[1]} ({ud[2]}) на {game_date} {game_name}")
+
+    await callback.answer("Запись отменена")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await state.set_state(Form.menu)
 
 @dp.message(Form.user_view_participants)
 async def user_view_participants_handler(message: types.Message, state: FSMContext):
@@ -629,16 +707,16 @@ async def cancel_game(message: types.Message, state: FSMContext):
         return
     clean_text = message.text.replace("📆", "").strip() if message.text else ""
     result = execute_query(
-    """
-    SELECT game_id
-    FROM games
-    WHERE is_deleted = FALSE
-        AND (
-            game_date || ' ' || game_name = %s
-            OR game_name || ' ' || game_date = %s
-            OR game_date || ' ' || REPLACE(game_name, '🏆', '🌃') = %s
-        )
-    """,
+        """
+        SELECT game_id
+        FROM games
+        WHERE is_deleted = FALSE
+          AND (
+              game_date || ' ' || game_name = %s
+              OR game_name || ' ' || game_date = %s
+              OR game_date || ' ' || REPLACE(game_name, '🏆', '🌃') = %s
+          )
+        """,
         (clean_text, clean_text, clean_text),
         fetchone=True
     )
