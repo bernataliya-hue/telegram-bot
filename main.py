@@ -98,7 +98,7 @@ def admin_menu_keyboard():
     builder.button(text="♻️ Восстановить игру")
     builder.button(text="🚫 Отмена игры")
     builder.button(text="🔔 Напомнить об игре")
-    builder.button(text="🔔 Напоминание об игре")
+    builder.button(text="🔔 Напомнить об игре")
     builder.button(text="📢 Рассылка")
     builder.button(text="👥 Список участников")
     builder.button(text="🏠 Главное меню")
@@ -757,6 +757,7 @@ async def callback_cancel_registration(callback: types.CallbackQuery):
     """, (user_id, game_id))
 
     await callback.answer("Запись отменена!")
+    await callback.message.edit_reply_markup(reply_markup=None)
 
     ud = execute_query(
         "SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s",
