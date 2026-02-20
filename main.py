@@ -650,6 +650,7 @@ async def callback_think(callback: types.CallbackQuery):
     await mark_thinking(user_id, game_id)
 
     await callback.answer("Админ уведомлен, что вы думаете! 😊")
+    await callback.message.edit_reply_markup(reply_markup=None)
 
     # Notify admin
     ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (user_id,), fetchone=True)
@@ -704,6 +705,7 @@ async def callback_reg(callback: types.CallbackQuery):
     )
 
     await callback.answer("Запись подтверждена! 😊")
+    await callback.message.edit_reply_markup(reply_markup=None)
 
     # Уведомление админу
     ud = execute_query(
