@@ -6,9 +6,10 @@ import database
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.redis import RedisStorage
+from redis.asyncio import Redis
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 import datetime
 
@@ -17,13 +18,18 @@ logging.basicConfig(level=logging.INFO)
 
 API_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = 2127578673
+REDIS_URL = os.environ.get("REDIS_URL")
 
 if not API_TOKEN:
     raise ValueError("❌ Не задан TELEGRAM_BOT_TOKEN в переменных окружения")
 
+if not REDIS_URL:
+    raise ValueError("❌ Не задан REDIS_URL")
+
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
-storage = MemoryStorage()
+redis = Redis.from_url(REDIS_URL)
+storage = RedisStorage(redis=redis)
 dp = Dispatcher(storage=storage)
 
 # Инициализация БД
