@@ -581,20 +581,25 @@ async def register_game(message: types.Message, state: FSMContext):
         return
     clean_text = message.text.replace("📆", "").strip() if message.text else ""
     result = execute_query(
-        "SELECT game_id FROM games WHERE %s LIKE '%' || game_date || '%' AND %s LIKE '%' || game_name || '%'",
-        (clean_text, clean_text),
+        """
+        SELECT game_id, game_name, game_date
+        FROM games
+        WHERE is_deleted = FALSE
+          AND %s LIKE '%' || game_date || '%'
+          AND (
+              %s LIKE '%' || game_name || '%'
+              OR %s LIKE '%' || REPLACE(game_name, '🏆', '🌃') || '%'
+          )
+        """,
+        (clean_text, clean_text, clean_text),
         fetchone=True
         )
     if result:
-        game_id = result[0]
+        game_id, game_name, game_date = result
         # Удаляем из списка думающих при регистрации
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
         execute_query("INSERT INTO registrations (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (message.from_user.id, game_id))
-
-        game_name = message.text.replace("📆", "").strip()
         rules = get_game_rules(game_name)
-        game_name, game_date = game
-
         await message.answer(f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
                              f"{rules}"
                              "💵Стоимость игр 600 руб. с человека💵\n"
@@ -612,7 +617,9 @@ async def register_game(message: types.Message, state: FSMContext):
         ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (message.from_user.id,), fetchone=True)
         if ud:
             await bot.send_message(ADMIN_ID, f"Новая запись: {ud[0]} {ud[1]} ({ud[2]}) на {message.text}")
-    await state.set_state(Form.menu)
+        else:
+            await message.answer("Не удалось найти выбранную игру. Попробуй выбрать её из списка ещё раз.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.set_state(Form.menu)
 
 @dp.message(Form.game_cancellation)
 async def cancel_game(message: types.Message, state: FSMContext):
@@ -621,7 +628,20 @@ async def cancel_game(message: types.Message, state: FSMContext):
         await state.set_state(Form.menu)
         return
     clean_text = message.text.replace("📆", "").strip() if message.text else ""
-    result = execute_query("SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s OR game_name || ' ' || game_date = %s", (clean_text, clean_text), fetchone=True)
+    result = execute_query(
+    """
+    SELECT game_id
+    FROM games
+    WHERE is_deleted = FALSE
+        AND (
+            game_date || ' ' || game_name = %s
+            OR game_name || ' ' || game_date = %s
+            OR game_date || ' ' || REPLACE(game_name, '🏆', '🌃') = %s
+        )
+    """,
+        (clean_text, clean_text, clean_text),
+        fetchone=True
+    )
     if result:
         game_id = result[0]
         # Удаляем из всех списков
@@ -636,6 +656,8 @@ async def cancel_game(message: types.Message, state: FSMContext):
         ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (message.from_user.id,), fetchone=True)
         if ud:
             await bot.send_message(ADMIN_ID, f"❌ Отмена записи: {ud[0]} {ud[1]} ({ud[2]}) на {message.text}")
+        else:
+            await message.answer("Не удалось найти выбранную игру. Попробуй выбрать её из списка ещё раз.", reply_markup=main_menu_keyboard(message.from_user.id))
     await state.set_state(Form.menu)
 
 @dp.callback_query(F.data.startswith("think_"))
