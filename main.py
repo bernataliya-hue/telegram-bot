@@ -547,7 +547,8 @@ async def callback_participants(callback: types.CallbackQuery, state: FSMContext
         FROM registrations r
         JOIN users u ON r.user_id = u.user_id
         WHERE r.game_id = %s
-    """, (game_id,), fetch=True)
+            AND r.status = %s
+    """, (game_id,'registered'), fetch=True)
 
     thinking_users = await get_thinking(game_id)
     thinking_users = set(map(int, thinking_users))
