@@ -427,7 +427,8 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
         FROM registrations r
         JOIN users u ON r.user_id = u.user_id
         WHERE r.game_id = %s
-    """, (game_id,), fetch=True)
+            AND r.status = %s
+    """, (game_id,'registered'), fetch=True)
 
     # Получаем думающих через Redis
     thinking_users = await get_thinking(game_id)
@@ -624,7 +625,8 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
             FROM registrations r
             JOIN users u ON r.user_id = u.user_id
             WHERE r.game_id = %s
-        """, (game_id,), fetch=True)
+                AND r.status = %s
+        """, (game_id,'registered'), fetch=True)
 
         # Получаем думающих через Redis
         thinking_users = await get_thinking(game_id)
