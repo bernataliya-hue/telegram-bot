@@ -113,9 +113,22 @@ async def get_thinking(game_id: int):
     return [r[0] for r in rows]
 
 def get_game_rules(game_name):
-    sport_rules = "17:00 – сбор и объяснение правил\n17:30 – школа мафии\n18:30 – начало игр\n\n"
+    sport_rules = "17:00 – сбор и объяснение правил\n17:30 – школа мафии\n18:00 – начало игр\n\n"
     city_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     rating_rules = "19:00 – начало игр\n\n"
+
+    if "Спортивная мафия" in game_name:
+        return sport_rules
+    elif "Рейтинговая игра" in game_name:
+        return rating_rules
+    elif "Городская мафия" in game_name:
+        return city_rules
+    return "\n"
+
+def get_game_cost(game_name):
+    sport_rules = "💵Стоимость игр 600 руб. с человека💵\n\n"
+    city_rules = "💵Стоимость игр 600 руб. с человека💵\n\n"
+    rating_rules = "💵Стоимость игр 800 руб. с человека💵\n\n"
 
     if "Спортивная мафия" in game_name:
         return sport_rules
@@ -681,9 +694,10 @@ async def register_game(message: types.Message, state: FSMContext):
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
         execute_query("INSERT INTO registrations (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (message.from_user.id, game_id))
         rules = get_game_rules(game_name)
+        cost = get_game_cost(game_name)
         await message.answer(f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
                              f"{rules}"
-                             "💵Стоимость игр 600 руб. с человека💵\n"
+                             f"{cost}"
                              "Оплачиваете после игры\n\n"
                              "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
                              "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
@@ -795,11 +809,12 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
     """, (user_id, game_id))
 
     rules = get_game_rules(game_name)
-
+    cost = get_game_cost(game_name)
+    
     await callback.message.answer(
         f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
         f"{rules}"
-        "💵Стоимость игр 600 руб. с человека💵\n"
+        f"{cost}"
         "Оплачиваете после игры\n\n"
         "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
         "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
