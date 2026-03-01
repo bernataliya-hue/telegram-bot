@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
+from aiogram_calendar.schemas import SimpleCalAct
 import datetime
 
 # Настройка логирования
@@ -427,6 +428,15 @@ async def process_edit_schedule(message: types.Message, state: FSMContext):
 
 @dp.callback_query(SimpleCalendarCallback.filter())
 async def process_simple_calendar(callback_query: types.CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext):
+    if callback_data.act == SimpleCalAct.cancel:
+        current_state = await state.get_state()
+        if current_state == Form.add_game_date.state:
+            await callback_query.message.answer("Добавление игры отменено.", reply_markup=admin_menu_keyboard())
+            await state.set_state(Form.admin_menu)
+        await callback_query.answer()
+        await callback_query.message.edit_reply_markup(reply_markup=None)
+        return
+
     selected, date = await SimpleCalendar().process_selection(callback_query, callback_data)
     if selected:
         # Форматируем дату: Сб 21.02
@@ -574,6 +584,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
             builder.button(text=f"📆{date} {display_name}", callback_data=f"reg_{game_id}")
+        builder.button(text="🔙 В меню", callback_data="menu_back")
         builder.adjust(1)
 
         await message.answer("На какую игру ты хочешь записаться?", reply_markup=builder.as_markup())
@@ -595,6 +606,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
             builder.button(text=f"📆{date} {display_name}", callback_data=f"cancel_{game_id}")
+        builder.button(text="🔙 В меню", callback_data="menu_back")
         builder.adjust(1)
 
         await message.answer("Запись на какую игру ты хочешь отменить?", reply_markup=builder.as_markup())
@@ -633,6 +645,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
             builder.button(text=f"📅{date} {display_name}", callback_data=f"participants_{game_id}")
+        builder.button(text="🔙 В меню", callback_data="menu_back")
         builder.adjust(1)
 
         await message.answer("Список участников какой игры ты хочешь посмотреть?", reply_markup=builder.as_markup())
@@ -687,6 +700,13 @@ async def callback_participants(callback: types.CallbackQuery, state: FSMContext
 
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
+    await state.set_state(Form.menu)
+
+@dp.callback_query(F.data == "menu_back")
+async def callback_menu_back(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("Ты вернулся в меню.", reply_markup=main_menu_keyboard(callback.from_user.id))
     await state.set_state(Form.menu)
 
 @dp.callback_query(F.data.startswith("cancel_"))
