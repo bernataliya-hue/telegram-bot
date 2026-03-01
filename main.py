@@ -76,6 +76,10 @@ class Form(StatesGroup):
     admin_reminder_audience = State()
     admin_reminder_custom_users = State()
     admin_broadcast = State()
+    admin_broadcast_game = State()
+    admin_broadcast_audience = State()
+    admin_broadcast_custom_users = State()
+    admin_broadcast_message = State()
     restore_game = State()
 
 # Главное меню
@@ -111,6 +115,77 @@ async def mark_thinking(user_id: int, game_id: int):
 async def get_thinking(game_id: int):
     rows = execute_query("SELECT user_id FROM thinking_players WHERE game_id = %s", (game_id,), fetch=True)
     return [r[0] for r in rows]
+
+def get_late_key(game_id: int) -> str:
+    return f"late_players:{game_id}"
+
+async def mark_late(user_id: int, game_id: int):
+    await redis.sadd(get_late_key(game_id), user_id)
+
+async def unmark_late(user_id: int, game_id: int):
+    await redis.srem(get_late_key(game_id), user_id)
+
+async def get_late_players(game_id: int):
+    rows = await redis.smembers(get_late_key(game_id))
+    return {int(uid) for uid in rows}
+
+def late_button_keyboard(game_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⏰ Опоздаю", callback_data=f"late_{game_id}")
+    return builder.as_markup()
+
+def parse_game_date(game_date: str):
+    if not game_date:
+        return None
+
+    normalized = game_date.strip()
+    parts = normalized.split()
+    if len(parts) >= 2 and parts[0] in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']:
+        normalized = parts[1]
+
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%d.%m"):
+        try:
+            parsed = datetime.datetime.strptime(normalized, fmt).date()
+            if fmt == "%d.%m":
+                return parsed.replace(year=datetime.date.today().year)
+            return parsed
+        except ValueError:
+            continue
+    return None
+
+def is_upcoming_game(game_date: str) -> bool:
+    parsed = parse_game_date(game_date)
+    if not parsed:
+        return True
+    return parsed >= datetime.date.today()
+
+def filter_upcoming_games(games):
+    return [game for game in games if is_upcoming_game(game[2])]
+
+def get_game_limit(game_name: str) -> int:
+    if "Рейтинговая игра" in game_name:
+        return 12
+    return 15
+
+async def is_game_full(game_id: int, game_name: str, user_id: int) -> bool:
+    existing = execute_query(
+        "SELECT status FROM registrations WHERE user_id=%s AND game_id=%s",
+        (user_id, game_id),
+        fetchone=True
+    )
+    if existing and existing[0] == "registered":
+        return False
+
+    registered_users = execute_query(
+        "SELECT user_id FROM registrations WHERE game_id=%s AND status='registered'",
+        (game_id,),
+        fetch=True
+    )
+    registered_ids = {uid for (uid,) in registered_users}
+    late_users = await get_late_players(game_id)
+    late_registered_count = len(registered_ids & late_users)
+    limit = get_game_limit(game_name) + late_registered_count
+    return len(registered_ids) >= limit
 
 def get_game_rules(game_name):
     sport_rules = "17:00 – сбор и объяснение правил\n17:30 – школа мафии\n18:00 – начало игр\n\n"
@@ -319,6 +394,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await state.set_state(Form.admin_cancel_game)
     elif message.text == "🔔 Напомнить об игре":
         games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
+        games = filter_upcoming_games(games)
         if not games:
             await message.answer("Список игр пуст.")
             return
@@ -331,8 +407,13 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await state.set_state(Form.admin_reminder)
     elif message.text == "📢 Рассылка":
         builder = ReplyKeyboardBuilder()
+        builder.button(text="👥 Всем пользователям")
+        builder.button(text="✅ Только записавшимся")
+        builder.button(text="❌ Только не записавшимся")
+        builder.button(text="👤 Выбрать пользователей")
         builder.button(text="🔙 Назад")
-        await message.answer("Введите сообщение для рассылки всем пользователям:", reply_markup=builder.as_markup(resize_keyboard=True))
+        builder.adjust(1)
+        await message.answer("Выберите аудиторию для рассылки:", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.admin_broadcast)
     elif message.text == "🏠 Главное меню":
         await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
@@ -436,7 +517,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
 
     # Получаем зарегистрированных участников
     participants = execute_query("""
-        SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick
+        SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick, u.telegram_username
         FROM registrations r
         JOIN users u ON r.user_id = u.user_id
         WHERE r.game_id = %s
@@ -446,6 +527,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
     # Получаем думающих через Redis
     thinking_users = await get_thinking(game_id)
     thinking_users = set(map(int, thinking_users))  # строки в int
+    late_users = await get_late_players(game_id)
 
     if not participants and not thinking_users:
         await message.answer(f"На игру '{message.text}' пока никто не записался.", reply_markup=admin_menu_keyboard())
@@ -456,16 +538,23 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
     response = f"Список участников на игру {message.text}:\n"
 
     # Основные участники
-    for i, (user_id, fn, ln, nick) in enumerate(participants, 1):
+    regular_participants = [p for p in participants if p[0] not in late_users]
+    late_participants = [p for p in participants if p[0] in late_users]
+    ordered_participants = regular_participants + late_participants
+
+    for i, (user_id, fn, ln, nick, tg_username) in enumerate(ordered_participants, 1):
+        username_text = f"@{tg_username}" if tg_username else "username не указан"
         mark = " (думает)" if user_id in thinking_users else ""
-        response += f"{i}. {fn} {ln} ({nick}){mark}\n"
+        late_mark = " (опоздает)" if user_id in late_users else ""
+        response += f"{i}. {fn} {ln} ({nick}, {username_text}){mark}{late_mark}\n"
 
     # Добавляем думающих, которых нет среди зарегистрированных
     for uid in thinking_users:
-        if not any(uid == user_id for user_id, _, _, _ in participants):
-            ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
+        if not any(uid == user_id for user_id, *_ in participants):
+            ud = execute_query("SELECT first_name, last_name, mafia_nick, telegram_username FROM users WHERE user_id=%s", (uid,), fetchone=True)
             if ud:
-                response += f"- {ud[0]} {ud[1]} ({ud[2]}) (думает)\n"
+                username_text = f"@{ud[3]}" if ud[3] else "username не указан"
+                response += f"- {ud[0]} {ud[1]} ({ud[2]}, {username_text}) (думает)\n"
 
     await message.answer(response, reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
@@ -474,6 +563,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
 async def menu_handler(message: types.Message, state: FSMContext):
     if message.text == "📝Записаться на игру":
         games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
+        games = filter_upcoming_games(games)
         if not games:
             await message.answer("К сожалению, на данный момент игр для записи нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -495,6 +585,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             JOIN games g ON r.game_id=g.game_id
             WHERE r.user_id=%s
         """, (message.from_user.id,), fetch=True)
+        games = filter_upcoming_games(games)
         if not games:
             await message.answer("Ты пока не записан ни на какую игру.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -510,6 +601,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
         await state.set_state(Form.menu)
     elif message.text == "📅Расписание игр":
         games = execute_query("SELECT game_name, game_date FROM games WHERE is_deleted = FALSE ORDER BY game_id ASC", fetch=True)
+        games = [g for g in games if is_upcoming_game(g[1])]
         if not games:
             await message.answer("<b>Расписание ближайших игр:</b>\n\nИгр пока не запланировано.", parse_mode="HTML")
             return
@@ -530,6 +622,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
         )
     elif message.text == "👥Список участников":
         games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
+        games = filter_upcoming_games(games)
         if not games:
             await message.answer("К сожалению, на данный момент игр нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -566,18 +659,22 @@ async def callback_participants(callback: types.CallbackQuery, state: FSMContext
 
     thinking_users = await get_thinking(game_id)
     thinking_users = set(map(int, thinking_users))
+    late_users = await get_late_players(game_id)
 
     title = f"📅{game_date} {game_name}"
     if not participants and not thinking_users:
         await callback.message.answer(f"На игру {title} пока никто не записался.", reply_markup=main_menu_keyboard(callback.from_user.id))
     else:
         response = f"Список участников на игру {title}:\n"
+        participant_ids = {uid for uid, _ in participants}
+        regular_participants = [p for p in participants if p[0] not in late_users]
+        late_participants = [p for p in participants if p[0] in late_users]
+
         idx = 1
-        participant_ids = set()
-        for uid, nick in participants:
-            participant_ids.add(uid)
+        for uid, nick in regular_participants + late_participants:
             mark = " (думает)" if uid in thinking_users else ""
-            response += f"{idx}. {nick}{mark}\n"
+            late_mark = " (опоздает)" if uid in late_users else ""
+            response += f"{idx}. {nick}{mark}{late_mark}\n"
             idx += 1
 
         for uid in thinking_users:
@@ -605,6 +702,7 @@ async def callback_cancel(callback: types.CallbackQuery, state: FSMContext):
     game_name, game_date = game
 
     execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (user_id, game_id))
+    await unmark_late(user_id, game_id)
     execute_query("DELETE FROM registrations WHERE user_id=%s AND game_id=%s", (user_id, game_id))
 
     await callback.message.answer(
@@ -634,7 +732,7 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
     if result:
         game_id = result[0]
         participants = execute_query("""
-            SELECT u.mafia_nick 
+            SELECT u.user_id, u.mafia_nick
             FROM registrations r
             JOIN users u ON r.user_id = u.user_id
             WHERE r.game_id = %s
@@ -644,20 +742,25 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
         # Получаем думающих через Redis
         thinking_users = await get_thinking(game_id)
         thinking_users = set(map(int, thinking_users))
+        late_users = await get_late_players(game_id)
 
         if not participants and not thinking_users:
             await message.answer(f"На игру {message.text} пока никто не записался.", reply_markup=main_menu_keyboard(message.from_user.id))
         else:
             response = f"Список участников на игру {message.text}:\n"
+            regular_participants = [p for p in participants if p[0] not in late_users]
+            late_participants = [p for p in participants if p[0] in late_users]
+            participant_ids = {uid for uid, _ in participants}
             idx = 1
-            for (nick,) in participants:
-                response += f"{idx}. {nick}\n"
+            for uid, nick in regular_participants + late_participants:
+                mark = " (думает)" if uid in thinking_users else ""
+                late_mark = " (опоздает)" if uid in late_users else ""
+                response += f"{idx}. {nick}{mark}{late_mark}\n"
                 idx += 1
 
             for uid in thinking_users:
                 # Проверяем, что не в списке основных
-                exists = execute_query("SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s", (uid, game_id), fetchone=True)
-                if not exists:
+                if uid not in participant_ids:
                     ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
                     if ud:
                         response += f"- {ud[0]} (думает)\n"
@@ -690,6 +793,15 @@ async def register_game(message: types.Message, state: FSMContext):
         )
     if result:
         game_id, game_name, game_date = result
+        if await is_game_full(game_id, game_name, message.from_user.id):
+            await message.answer(
+                "К сожалению, на данную игру записалось максимальное количество участников😢\n"
+                "Попробуй записаться на другую игру или напиши Нате @natabordo, возможно она сможет что-то придумать☺️",
+                reply_markup=main_menu_keyboard(message.from_user.id)
+            )
+            await state.set_state(Form.menu)
+            return
+
         # Удаляем из списка думающих при регистрации
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
         execute_query("INSERT INTO registrations (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (message.from_user.id, game_id))
@@ -704,9 +816,9 @@ async def register_game(message: types.Message, state: FSMContext):
                              "❗️Скидки и акции не суммируются\n\n"
                              "P.S. На улице снег, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏\n\n"
                              "❗️Игра не состоится, если придут меньше 10 человек❗️\n"
-                             "Поэтому, пожалуйста, не пропускай игру или отмени запись, если планы изменятся\n"
-                             "Если будешь опаздывать - пиши Нате @natabordo😊", 
-                             reply_markup=main_menu_keyboard(message.from_user.id),
+                             "Поэтому, пожалуйста, не пропускай игру или отмени запись, если планы изменятся\n\n"
+                             "Предупреди, если опоздаешь", 
+                             reply_markup=late_button_keyboard(game_id),
                              parse_mode="HTML"
                             )
         ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (message.from_user.id,), fetchone=True)
@@ -741,6 +853,7 @@ async def cancel_game(message: types.Message, state: FSMContext):
         game_id = result[0]
         # Удаляем из всех списков
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
+        await unmark_late(message.from_user.id, game_id)
         execute_query("DELETE FROM registrations WHERE user_id=%s AND game_id=%s", (message.from_user.id, game_id))
         await message.answer("Запись отменена.\n"
                              "Спасибо за то, что уважаешь клуб и других игроков!☺️\n"
@@ -794,6 +907,17 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
 
     game_name, game_date = game
 
+    if await is_game_full(game_id, game_name, user_id):
+        await callback.message.answer(
+            "К сожалению, на данную игру записалось максимальное количество участников😢\n"
+            "Попробуй записаться на другую игру или напиши Нате @natabordo, возможно она сможет что-то придумать☺️",
+            reply_markup=main_menu_keyboard(user_id)
+        )
+        await callback.answer("На игру больше нельзя записаться", show_alert=True)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await state.set_state(Form.menu)
+        return
+
     # Удаляем из списка думающих
     execute_query(
         "DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s",
@@ -820,10 +944,10 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
         "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
         "❗️Скидки и акции не суммируются\n\n"
         "P.S. Возьмите сменную обувь 🙏\n\n"
-        "❗️Игра не состоится, если придут меньше 10 человек❗️\n"
-        "Если будешь опаздывать - пиши Нате @natabordo 😊",
+        "❗️Игра не состоится, если придут меньше 10 человек❗️\n\n"
+        "Предупреди, если опоздаешь",
         parse_mode="HTML",
-        reply_markup=main_menu_keyboard(user_id)
+        reply_markup=late_button_keyboard(game_id)
     )
 
     await callback.answer("Запись подтверждена! 😊")
@@ -843,6 +967,32 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
             f"Новая запись: {ud[0]} {ud[1]} ({ud[2]}) на {game_date} {game_name}"
         )
 
+@dp.callback_query(F.data.startswith("late_"))
+async def callback_late(callback: types.CallbackQuery):
+    game_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+
+    reg = execute_query(
+        "SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s AND status='registered'",
+        (user_id, game_id),
+        fetchone=True
+    )
+    if not reg:
+        await callback.answer("Сначала нужно записаться на игру.", show_alert=True)
+        return
+
+    await mark_late(user_id, game_id)
+    await callback.answer("Отметили, что вы опоздаете ⏰")
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s", (game_id,), fetchone=True)
+    ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (user_id,), fetchone=True)
+    if game and ud:
+        await bot.send_message(
+            ADMIN_ID,
+            f"⏰ Опоздает: {ud[0]} {ud[1]} ({ud[2]}) на {game[1]} {game[0]}"
+        )
+
 @dp.callback_query(F.data.startswith("decline_"))
 async def callback_decline(callback: types.CallbackQuery):
     game_id = int(callback.data.split("_")[1])
@@ -854,6 +1004,7 @@ async def callback_decline(callback: types.CallbackQuery):
         ON CONFLICT (user_id, game_id)
         DO UPDATE SET status = 'declined'
     """, (user_id, game_id))
+    await unmark_late(user_id, game_id)
 
     await callback.answer("Спасибо за ответ!")
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -880,6 +1031,7 @@ async def callback_cancel_registration(callback: types.CallbackQuery):
         SET status = 'declined'
         WHERE user_id=%s AND game_id=%s
     """, (user_id, game_id))
+    await unmark_late(user_id, game_id)
 
     await callback.answer("Запись отменена!")
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -1077,6 +1229,7 @@ async def send_game_reminders(user_ids, game_id):
                     text="❌ Отменить запись",
                     callback_data=f"cancelreg_{game_id}"
                 )
+                builder.button(text="⏰ Опоздаю", callback_data=f"late_{game_id}")
             else:
                 builder.button(text="📝 Записаться", callback_data=f"reg_{game_id}")
                 builder.button(text="🤔 Думаю", callback_data=f"think_{game_id}")
@@ -1103,9 +1256,139 @@ async def admin_broadcast_handler(message: types.Message, state: FSMContext):
         await state.set_state(Form.admin_menu)
         return
 
-    users = execute_query("SELECT user_id FROM users", fetch=True)
+    if message.text == "👥 Всем пользователям":
+        users = execute_query("SELECT user_id FROM users", fetch=True)
+        target_users = [uid for (uid,) in users]
+        await state.update_data(broadcast_target_users=target_users)
+        await message.answer("Введите сообщение для рассылки:")
+        await state.set_state(Form.admin_broadcast_message)
+        return
+
+    if message.text in ["✅ Только записавшимся", "❌ Только не записавшимся"]:
+        games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
+        games = filter_upcoming_games(games)
+        if not games:
+            await message.answer("Нет доступных игр для выбора.", reply_markup=admin_menu_keyboard())
+            await state.set_state(Form.admin_menu)
+            return
+
+        await state.update_data(broadcast_filter_type=message.text)
+        builder = ReplyKeyboardBuilder()
+        for _, name, date in games:
+            builder.button(text=f"{date} {name}")
+        builder.button(text="🔙 Назад")
+        builder.adjust(1)
+        await message.answer("Выберите игру для фильтра аудитории:", reply_markup=builder.as_markup(resize_keyboard=True))
+        await state.set_state(Form.admin_broadcast_game)
+        return
+
+    if message.text == "👤 Выбрать пользователей":
+        users = execute_query("SELECT user_id, first_name, last_name, mafia_nick FROM users", fetch=True)
+        if not users:
+            await message.answer("Пользователей не найдено.")
+            return
+
+        await state.update_data(all_users_for_broadcast_selection=users, selected_broadcast_users=[])
+        builder = InlineKeyboardBuilder()
+        for uid, fn, ln, nick in users:
+            builder.button(text=f"{fn} {ln} ({nick})", callback_data=f"bseluser_{uid}")
+        builder.button(text="✅ Готово", callback_data="bseluser_done")
+        builder.adjust(1)
+        await message.answer("Выберите пользователей из списка:", reply_markup=builder.as_markup())
+        await state.set_state(Form.admin_broadcast_custom_users)
+        return
+
+    await message.answer("Пожалуйста, используйте кнопки.")
+
+@dp.message(Form.admin_broadcast_game)
+async def admin_broadcast_game_handler(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Назад":
+        await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
+    clean_text = message.text.strip() if message.text else ""
+    result = execute_query(
+        "SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s OR game_name || ' ' || game_date = %s",
+        (clean_text, clean_text),
+        fetchone=True
+    )
+    if not result:
+        await message.answer("Игра не найдена. Выбери игру кнопкой из списка.")
+        return
+
+    game_id = result[0]
+    data = await state.get_data()
+    filter_type = data.get("broadcast_filter_type")
+
+    if filter_type == "✅ Только записавшимся":
+        rows = execute_query("SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered'", (game_id,), fetch=True)
+        target_users = [r[0] for r in rows]
+    else:
+        rows = execute_query(
+            "SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered')",
+            (game_id,),
+            fetch=True
+        )
+        target_users = [r[0] for r in rows]
+
+    await state.update_data(broadcast_target_users=target_users)
+    await message.answer("Введите сообщение для рассылки:")
+    await state.set_state(Form.admin_broadcast_message)
+
+@dp.callback_query(Form.admin_broadcast_custom_users, F.data.startswith("bseluser_"))
+async def process_broadcast_user_selection(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get('selected_broadcast_users', [])
+    all_users = data.get('all_users_for_broadcast_selection', [])
+
+    action = callback.data.split("_")[1]
+    if action == "done":
+        if not selected:
+            await callback.answer("Никто не выбран!", show_alert=True)
+            return
+
+        await state.update_data(broadcast_target_users=selected)
+        await callback.message.edit_text("Пользователи выбраны.")
+        await callback.message.answer("Введите сообщение для рассылки:")
+        await state.set_state(Form.admin_broadcast_message)
+        await callback.answer()
+        return
+
+    user_id = int(action)
+    if user_id in selected:
+        selected.remove(user_id)
+        await callback.answer("Пользователь удален из списка")
+    else:
+        selected.append(user_id)
+        await callback.answer("Пользователь добавлен в список")
+
+    await state.update_data(selected_broadcast_users=selected)
+
+    builder = InlineKeyboardBuilder()
+    for uid, fn, ln, nick in all_users:
+        mark = "✅ " if uid in selected else ""
+        builder.button(text=f"{mark}{fn} {ln} ({nick})", callback_data=f"bseluser_{uid}")
+    builder.button(text="✅ Готово", callback_data="bseluser_done")
+    builder.adjust(1)
+    await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
+
+@dp.message(Form.admin_broadcast_message)
+async def admin_broadcast_message_handler(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Назад":
+        await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
+    data = await state.get_data()
+    users = data.get("broadcast_target_users", [])
+    if not users:
+        await message.answer("Нет пользователей для рассылки.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
     count = 0
-    for (user_id,) in users:
+    for user_id in users:
         try:
             await bot.send_message(user_id, message.text)
             count += 1
