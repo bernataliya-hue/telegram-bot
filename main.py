@@ -112,6 +112,24 @@ async def get_thinking(game_id: int):
     rows = execute_query("SELECT user_id FROM thinking_players WHERE game_id = %s", (game_id,), fetch=True)
     return [r[0] for r in rows]
 
+def get_late_key(game_id: int) -> str:
+    return f"late_players:{game_id}"
+
+async def mark_late(user_id: int, game_id: int):
+    await redis.sadd(get_late_key(game_id), user_id)
+
+async def unmark_late(user_id: int, game_id: int):
+    await redis.srem(get_late_key(game_id), user_id)
+
+async def get_late_players(game_id: int):
+    rows = await redis.smembers(get_late_key(game_id))
+    return {int(uid) for uid in rows}
+
+def late_button_keyboard(game_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⏰ Опоздаю", callback_data=f"late_{game_id}")
+    return builder.as_markup()
+
 def get_game_rules(game_name):
     sport_rules = "17:00 – сбор и объяснение правил\n17:30 – школа мафии\n18:00 – начало игр\n\n"
     city_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
@@ -436,7 +454,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
 
     # Получаем зарегистрированных участников
     participants = execute_query("""
-        SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick
+        SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick, u.telegram_username
         FROM registrations r
         JOIN users u ON r.user_id = u.user_id
         WHERE r.game_id = %s
@@ -446,6 +464,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
     # Получаем думающих через Redis
     thinking_users = await get_thinking(game_id)
     thinking_users = set(map(int, thinking_users))  # строки в int
+    late_users = await get_late_players(game_id)
 
     if not participants and not thinking_users:
         await message.answer(f"На игру '{message.text}' пока никто не записался.", reply_markup=admin_menu_keyboard())
@@ -456,16 +475,23 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
     response = f"Список участников на игру {message.text}:\n"
 
     # Основные участники
-    for i, (user_id, fn, ln, nick) in enumerate(participants, 1):
+    regular_participants = [p for p in participants if p[0] not in late_users]
+    late_participants = [p for p in participants if p[0] in late_users]
+    ordered_participants = regular_participants + late_participants
+
+    for i, (user_id, fn, ln, nick, tg_username) in enumerate(ordered_participants, 1):
+        username_text = f"@{tg_username}" if tg_username else "username не указан"
         mark = " (думает)" if user_id in thinking_users else ""
-        response += f"{i}. {fn} {ln} ({nick}){mark}\n"
+        late_mark = " (опоздает)" if user_id in late_users else ""
+        response += f"{i}. {fn} {ln} ({nick}, {username_text}){mark}{late_mark}\n"
 
     # Добавляем думающих, которых нет среди зарегистрированных
     for uid in thinking_users:
-        if not any(uid == user_id for user_id, _, _, _ in participants):
-            ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
+        if not any(uid == user_id for user_id, *_ in participants):
+            ud = execute_query("SELECT first_name, last_name, mafia_nick, telegram_username FROM users WHERE user_id=%s", (uid,), fetchone=True)
             if ud:
-                response += f"- {ud[0]} {ud[1]} ({ud[2]}) (думает)\n"
+                username_text = f"@{ud[3]}" if ud[3] else "username не указан"
+                response += f"- {ud[0]} {ud[1]} ({ud[2]}, {username_text}) (думает)\n"
 
     await message.answer(response, reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
@@ -566,18 +592,22 @@ async def callback_participants(callback: types.CallbackQuery, state: FSMContext
 
     thinking_users = await get_thinking(game_id)
     thinking_users = set(map(int, thinking_users))
+    late_users = await get_late_players(game_id)
 
     title = f"📅{game_date} {game_name}"
     if not participants and not thinking_users:
         await callback.message.answer(f"На игру {title} пока никто не записался.", reply_markup=main_menu_keyboard(callback.from_user.id))
     else:
         response = f"Список участников на игру {title}:\n"
+        participant_ids = {uid for uid, _ in participants}
+        regular_participants = [p for p in participants if p[0] not in late_users]
+        late_participants = [p for p in participants if p[0] in late_users]
+
         idx = 1
-        participant_ids = set()
-        for uid, nick in participants:
-            participant_ids.add(uid)
+        for uid, nick in regular_participants + late_participants:
             mark = " (думает)" if uid in thinking_users else ""
-            response += f"{idx}. {nick}{mark}\n"
+            late_mark = " (опоздает)" if uid in late_users else ""
+            response += f"{idx}. {nick}{mark}{late_mark}\n"
             idx += 1
 
         for uid in thinking_users:
@@ -605,6 +635,7 @@ async def callback_cancel(callback: types.CallbackQuery, state: FSMContext):
     game_name, game_date = game
 
     execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (user_id, game_id))
+    await unmark_late(user_id, game_id)
     execute_query("DELETE FROM registrations WHERE user_id=%s AND game_id=%s", (user_id, game_id))
 
     await callback.message.answer(
@@ -634,7 +665,7 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
     if result:
         game_id = result[0]
         participants = execute_query("""
-            SELECT u.mafia_nick 
+            SELECT u.user_id, u.mafia_nick
             FROM registrations r
             JOIN users u ON r.user_id = u.user_id
             WHERE r.game_id = %s
@@ -644,20 +675,25 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
         # Получаем думающих через Redis
         thinking_users = await get_thinking(game_id)
         thinking_users = set(map(int, thinking_users))
+        late_users = await get_late_players(game_id)
 
         if not participants and not thinking_users:
             await message.answer(f"На игру {message.text} пока никто не записался.", reply_markup=main_menu_keyboard(message.from_user.id))
         else:
             response = f"Список участников на игру {message.text}:\n"
+            regular_participants = [p for p in participants if p[0] not in late_users]
+            late_participants = [p for p in participants if p[0] in late_users]
+            participant_ids = {uid for uid, _ in participants}
             idx = 1
-            for (nick,) in participants:
-                response += f"{idx}. {nick}\n"
+            for uid, nick in regular_participants + late_participants:
+                mark = " (думает)" if uid in thinking_users else ""
+                late_mark = " (опоздает)" if uid in late_users else ""
+                response += f"{idx}. {nick}{mark}{late_mark}\n"
                 idx += 1
 
             for uid in thinking_users:
                 # Проверяем, что не в списке основных
-                exists = execute_query("SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s", (uid, game_id), fetchone=True)
-                if not exists:
+                if uid not in participant_ids:
                     ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
                     if ud:
                         response += f"- {ud[0]} (думает)\n"
@@ -704,9 +740,9 @@ async def register_game(message: types.Message, state: FSMContext):
                              "❗️Скидки и акции не суммируются\n\n"
                              "P.S. На улице снег, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏\n\n"
                              "❗️Игра не состоится, если придут меньше 10 человек❗️\n"
-                             "Поэтому, пожалуйста, не пропускай игру или отмени запись, если планы изменятся\n"
-                             "Если будешь опаздывать - пиши Нате @natabordo😊", 
-                             reply_markup=main_menu_keyboard(message.from_user.id),
+                             "Поэтому, пожалуйста, не пропускай игру или отмени запись, если планы изменятся\n\n"
+                             "Предупреди, если опоздаешь", 
+                             reply_markup=late_button_keyboard(game_id),
                              parse_mode="HTML"
                             )
         ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (message.from_user.id,), fetchone=True)
@@ -741,6 +777,7 @@ async def cancel_game(message: types.Message, state: FSMContext):
         game_id = result[0]
         # Удаляем из всех списков
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
+        await unmark_late(message.from_user.id, game_id)
         execute_query("DELETE FROM registrations WHERE user_id=%s AND game_id=%s", (message.from_user.id, game_id))
         await message.answer("Запись отменена.\n"
                              "Спасибо за то, что уважаешь клуб и других игроков!☺️\n"
@@ -820,10 +857,10 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
         "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
         "❗️Скидки и акции не суммируются\n\n"
         "P.S. Возьмите сменную обувь 🙏\n\n"
-        "❗️Игра не состоится, если придут меньше 10 человек❗️\n"
-        "Если будешь опаздывать - пиши Нате @natabordo 😊",
+        "❗️Игра не состоится, если придут меньше 10 человек❗️\n\n"
+        "Предупреди, если опоздаешь",
         parse_mode="HTML",
-        reply_markup=main_menu_keyboard(user_id)
+        reply_markup=late_button_keyboard(game_id)
     )
 
     await callback.answer("Запись подтверждена! 😊")
@@ -843,6 +880,32 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
             f"Новая запись: {ud[0]} {ud[1]} ({ud[2]}) на {game_date} {game_name}"
         )
 
+@dp.callback_query(F.data.startswith("late_"))
+async def callback_late(callback: types.CallbackQuery):
+    game_id = int(callback.data.split("_")[1])
+    user_id = callback.from_user.id
+
+    reg = execute_query(
+        "SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s AND status='registered'",
+        (user_id, game_id),
+        fetchone=True
+    )
+    if not reg:
+        await callback.answer("Сначала нужно записаться на игру.", show_alert=True)
+        return
+
+    await mark_late(user_id, game_id)
+    await callback.answer("Отметили, что вы опоздаете ⏰")
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s", (game_id,), fetchone=True)
+    ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (user_id,), fetchone=True)
+    if game and ud:
+        await bot.send_message(
+            ADMIN_ID,
+            f"⏰ Опоздает: {ud[0]} {ud[1]} ({ud[2]}) на {game[1]} {game[0]}"
+        )
+
 @dp.callback_query(F.data.startswith("decline_"))
 async def callback_decline(callback: types.CallbackQuery):
     game_id = int(callback.data.split("_")[1])
@@ -854,6 +917,7 @@ async def callback_decline(callback: types.CallbackQuery):
         ON CONFLICT (user_id, game_id)
         DO UPDATE SET status = 'declined'
     """, (user_id, game_id))
+    await unmark_late(user_id, game_id)
 
     await callback.answer("Спасибо за ответ!")
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -880,6 +944,7 @@ async def callback_cancel_registration(callback: types.CallbackQuery):
         SET status = 'declined'
         WHERE user_id=%s AND game_id=%s
     """, (user_id, game_id))
+    await unmark_late(user_id, game_id)
 
     await callback.answer("Запись отменена!")
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -1077,6 +1142,7 @@ async def send_game_reminders(user_ids, game_id):
                     text="❌ Отменить запись",
                     callback_data=f"cancelreg_{game_id}"
                 )
+                builder.button(text="⏰ Опоздаю", callback_data=f"late_{game_id}")
             else:
                 builder.button(text="📝 Записаться", callback_data=f"reg_{game_id}")
                 builder.button(text="🤔 Думаю", callback_data=f"think_{game_id}")
