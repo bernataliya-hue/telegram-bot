@@ -18,12 +18,16 @@ import datetime
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-API_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+API_TOKEN = (
+    os.environ.get("TELEGRAM_BOT_TOKEN")
+    or os.environ.get("BOT_TOKEN")
+    or os.environ.get("TELEGRAM_TOKEN")
+)
 ADMIN_ID = 2127578673
 REDIS_URL = os.environ.get("REDIS_URL")
 
 if not API_TOKEN:
-    raise ValueError("❌ Не задан TELEGRAM_BOT_TOKEN в переменных окружения")
+    raise ValueError("❌ Не задан токен бота. Укажи TELEGRAM_BOT_TOKEN (или BOT_TOKEN / TELEGRAM_TOKEN)")
 
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
@@ -40,14 +44,15 @@ async def _check_redis_connection(redis_client: Redis) -> bool:
 
 
 if REDIS_URL:
-    candidate_redis = Redis.from_url(REDIS_URL)
+    candidate_redis = None
     try:
+        candidate_redis = Redis.from_url(REDIS_URL)
         redis_ok = asyncio.run(_check_redis_connection(candidate_redis))
     except Exception as e:
-        logging.warning(f"Не удалось проверить Redis, переключаемся на MemoryStorage: {e}")
+        logging.warning(f"Не удалось создать/проверить Redis, переключаемся на MemoryStorage: {e}")
         redis_ok = False
 
-    if redis_ok:
+    if redis_ok and candidate_redis is not None:
         redis = candidate_redis
         storage = RedisStorage(redis=redis)
         logging.info("Используется RedisStorage")
