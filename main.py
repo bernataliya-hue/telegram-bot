@@ -6,6 +6,7 @@ import database
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 from aiogram.fsm.state import State, StatesGroup
@@ -24,13 +25,18 @@ REDIS_URL = os.environ.get("REDIS_URL")
 if not API_TOKEN:
     raise ValueError("❌ Не задан TELEGRAM_BOT_TOKEN в переменных окружения")
 
-if not REDIS_URL:
-    raise ValueError("❌ Не задан REDIS_URL")
-
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
-redis = Redis.from_url(REDIS_URL)
-storage = RedisStorage(redis=redis)
+redis = None
+
+if REDIS_URL:
+    redis = Redis.from_url(REDIS_URL)
+    storage = RedisStorage(redis=redis)
+    logging.info("Используется RedisStorage")
+else:
+    storage = MemoryStorage()
+    logging.warning("REDIS_URL не задан. Используется MemoryStorage (без сохранения FSM-состояния между перезапусками)")
+
 dp = Dispatcher(storage=storage)
 
 # Инициализация БД
@@ -121,12 +127,18 @@ def get_late_key(game_id: int) -> str:
     return f"late_players:{game_id}"
 
 async def mark_late(user_id: int, game_id: int):
+    if not redis:
+        return
     await redis.sadd(get_late_key(game_id), user_id)
 
 async def unmark_late(user_id: int, game_id: int):
+    if not redis:
+        return
     await redis.srem(get_late_key(game_id), user_id)
 
 async def get_late_players(game_id: int):
+    if not redis:
+        return set()
     rows = await redis.smembers(get_late_key(game_id))
     return {int(uid) for uid in rows}
 
