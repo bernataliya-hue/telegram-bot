@@ -29,13 +29,34 @@ if not API_TOKEN:
 bot = Bot(token=API_TOKEN)
 redis = None
 
+
+async def _check_redis_connection(redis_client: Redis) -> bool:
+    try:
+        await asyncio.wait_for(redis_client.ping(), timeout=3)
+        return True
+    except Exception as e:
+        logging.warning(f"Redis недоступен, переключаемся на MemoryStorage: {e}")
+        return False
+
+
 if REDIS_URL:
-    redis = Redis.from_url(REDIS_URL)
-    storage = RedisStorage(redis=redis)
-    logging.info("Используется RedisStorage")
+    candidate_redis = Redis.from_url(REDIS_URL)
+    try:
+        redis_ok = asyncio.run(_check_redis_connection(candidate_redis))
+    except Exception as e:
+        logging.warning(f"Не удалось проверить Redis, переключаемся на MemoryStorage: {e}")
+        redis_ok = False
+
+    if redis_ok:
+        redis = candidate_redis
+        storage = RedisStorage(redis=redis)
+        logging.info("Используется RedisStorage")
+    else:
+        storage = MemoryStorage()
+        logging.warning("Используется MemoryStorage (FSM-состояние не сохраняется между перезапусками)")
 else:
     storage = MemoryStorage()
-    logging.warning("REDIS_URL не задан. Используется MemoryStorage (без сохранения FSM-состояния между перезапусками)")
+    logging.warning("REDIS_URL не задан. Используется MemoryStorage (FSM-состояние не сохраняется между перезапусками)")
 
 dp = Dispatcher(storage=storage)
 
