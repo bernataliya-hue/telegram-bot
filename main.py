@@ -34,15 +34,33 @@ bot = Bot(token=API_TOKEN)
 redis = None
 
 
+async def _check_redis_connection(redis_client: Redis) -> bool:
+    try:
+        await asyncio.wait_for(redis_client.ping(), timeout=0.7)
+        return True
+    except Exception as e:
+        logging.warning(f"Redis недоступен, переключаемся на MemoryStorage: {e}")
+        return False
+
+
 if REDIS_URL:
     candidate_redis = None
     try:
         candidate_redis = Redis.from_url(REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
-        storage = RedisStorage(redis=candidate_redis)
+        redis_ok = asyncio.run(_check_redis_connection(candidate_redis))
+    except Exception as e:
+        logging.warning(f"Не удалось создать/проверить Redis, переключаемся на MemoryStorage: {e}")
+        redis_ok = False
+
+    if redis_ok and candidate_redis is not None:
         redis = candidate_redis
         logging.info("Используется RedisStorage")
-    except Exception as e:
-        logging.warning(f"Не удалось инициализировать RedisStorage, переключаемся на MemoryStorage: {e}")
+    else:
+        if candidate_redis is not None:
+            try:
+                asyncio.run(candidate_redis.aclose())
+            except Exception:
+                pass
         storage = MemoryStorage()
         logging.warning("Используется MemoryStorage (FSM-состояние не сохраняется между перезапусками)")
 else:
@@ -845,7 +863,12 @@ async def register_game(message: types.Message, state: FSMContext):
 
         # Удаляем из списка думающих при регистрации
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
-        execute_query("INSERT INTO registrations (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (message.from_user.id, game_id))
+        execute_query("""
+            INSERT INTO registrations (user_id, game_id, status)
+            VALUES (%s, %s, 'registered')
+            ON CONFLICT (user_id, game_id)
+            DO UPDATE SET status = 'registered'
+        """, (message.from_user.id, game_id))
         rules = get_game_rules(game_name)
         cost = get_game_cost(game_name)
         await message.answer(f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
