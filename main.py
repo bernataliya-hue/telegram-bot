@@ -36,7 +36,7 @@ redis = None
 
 async def _check_redis_connection(redis_client: Redis) -> bool:
     try:
-        await asyncio.wait_for(redis_client.ping(), timeout=3)
+        await asyncio.wait_for(redis_client.ping(), timeout=0.7)
         return True
     except Exception as e:
         logging.warning(f"Redis недоступен, переключаемся на MemoryStorage: {e}")
@@ -46,7 +46,7 @@ async def _check_redis_connection(redis_client: Redis) -> bool:
 if REDIS_URL:
     candidate_redis = None
     try:
-        candidate_redis = Redis.from_url(REDIS_URL)
+        candidate_redis = Redis.from_url(REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
         redis_ok = asyncio.run(_check_redis_connection(candidate_redis))
     except Exception as e:
         logging.warning(f"Не удалось создать/проверить Redis, переключаемся на MemoryStorage: {e}")
@@ -57,6 +57,11 @@ if REDIS_URL:
         storage = RedisStorage(redis=redis)
         logging.info("Используется RedisStorage")
     else:
+        if candidate_redis is not None:
+            try:
+                asyncio.run(candidate_redis.aclose())
+            except Exception:
+                pass
         storage = MemoryStorage()
         logging.warning("Используется MemoryStorage (FSM-состояние не сохраняется между перезапусками)")
 else:
@@ -149,24 +154,66 @@ async def get_thinking(game_id: int):
     rows = execute_query("SELECT user_id FROM thinking_players WHERE game_id = %s", (game_id,), fetch=True)
     return [r[0] for r in rows]
 
-def get_late_key(game_id: int) -> str:
-    return f"late_players:{game_id}"
-
 async def mark_late(user_id: int, game_id: int):
-    if not redis:
-        return
-    await redis.sadd(get_late_key(game_id), user_id)
+    try:
+        execute_query(
+            """
+            UPDATE registrations
+            SET is_late = TRUE
+            WHERE user_id = %s AND game_id = %s AND status = 'registered'
+            """,
+            (user_id, game_id)
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось обновить registrations.is_late: {e}")
+
+    # legacy-совместимость со старыми данными
+    try:
+        execute_query(
+            "INSERT INTO late_players (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (user_id, game_id)
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось записать late_players: {e}")
 
 async def unmark_late(user_id: int, game_id: int):
-    if not redis:
-        return
-    await redis.srem(get_late_key(game_id), user_id)
+    try:
+        execute_query(
+            "UPDATE registrations SET is_late = FALSE WHERE user_id = %s AND game_id = %s",
+            (user_id, game_id)
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось сбросить registrations.is_late: {e}")
+
+    try:
+        execute_query(
+            "DELETE FROM late_players WHERE user_id = %s AND game_id = %s",
+            (user_id, game_id)
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось удалить late_players: {e}")
 
 async def get_late_players(game_id: int):
-    if not redis:
-        return set()
-    rows = await redis.smembers(get_late_key(game_id))
-    return {int(uid) for uid in rows}
+    late_ids = set()
+
+    try:
+        rows = execute_query(
+            "SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered' AND is_late = TRUE",
+            (game_id,),
+            fetch=True
+        )
+        late_ids.update(int(uid) for (uid,) in rows)
+    except Exception as e:
+        logging.warning(f"Не удалось прочитать registrations.is_late: {e}")
+
+    # fallback + совместимость с уже сохраненными отметками
+    try:
+        rows = execute_query("SELECT user_id FROM late_players WHERE game_id = %s", (game_id,), fetch=True)
+        late_ids.update(int(uid) for (uid,) in rows)
+    except Exception as e:
+        logging.warning(f"Не удалось прочитать late_players: {e}")
+
+    return late_ids
 
 def late_button_keyboard(game_id: int):
     builder = InlineKeyboardBuilder()
@@ -251,6 +298,26 @@ def get_game_cost(game_name):
     elif "Городская мафия" in game_name:
         return city_rules
     return "\n"
+
+async def wake_up_all_users():
+    users = execute_query("SELECT user_id FROM users", fetch=True)
+    if not users:
+        logging.info("Нет пользователей для wake-up уведомления")
+        return
+
+    sent = 0
+    for (user_id,) in users:
+        try:
+            await bot.send_message(
+                user_id,
+                "✅ Бот снова на связи после обновления. Можно пользоваться как обычно."
+            )
+            sent += 1
+            await asyncio.sleep(0.03)
+        except Exception as e:
+            logging.warning(f"Wake-up: не удалось отправить сообщение пользователю {user_id}: {e}")
+
+    logging.info(f"Wake-up завершен: уведомлено {sent}/{len(users)} пользователей")
 
 # ===================== /start и профиль =====================
 @dp.message(Command("start"))
@@ -862,7 +929,12 @@ async def register_game(message: types.Message, state: FSMContext):
 
         # Удаляем из списка думающих при регистрации
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
-        execute_query("INSERT INTO registrations (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (message.from_user.id, game_id))
+        execute_query("""
+            INSERT INTO registrations (user_id, game_id, status, is_late)
+            VALUES (%s, %s, 'registered', FALSE)
+            ON CONFLICT (user_id, game_id)
+            DO UPDATE SET status = 'registered', is_late = FALSE
+        """, (message.from_user.id, game_id))
         rules = get_game_rules(game_name)
         cost = get_game_cost(game_name)
         await message.answer(f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
@@ -984,10 +1056,10 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
 
     # Регистрируем или обновляем статус
     execute_query("""
-        INSERT INTO registrations (user_id, game_id, status)
-        VALUES (%s, %s, 'registered')
+        INSERT INTO registrations (user_id, game_id, status, is_late)
+        VALUES (%s, %s, 'registered', FALSE)
         ON CONFLICT (user_id, game_id)
-        DO UPDATE SET status = 'registered'
+        DO UPDATE SET status = 'registered', is_late = FALSE
     """, (user_id, game_id))
 
     rules = get_game_rules(game_name)
@@ -1459,13 +1531,13 @@ async def admin_broadcast_message_handler(message: types.Message, state: FSMCont
 async def main():
     try:
         # Удаляем вебхук перед запуском polling, чтобы избежать конфликтов
-        await bot.delete_webhook(drop_pending_updates=True)
-        # skip_updates=True в aiogram 3.x передается через drop_pending_updates в delete_webhook
-        # или напрямую в start_polling
-        await dp.start_polling(bot, skip_updates=True)
+        await bot.delete_webhook(drop_pending_updates=False)
+        # Пробуждаем пользователей после обновления, чтобы не требовалось ручное переоткрытие диалога
+        await wake_up_all_users()
+        # Оставляем pending updates, чтобы пользователям не приходилось заново нажимать кнопки после деплоя
+        await dp.start_polling(bot, skip_updates=False)
     finally:
         await bot.session.close()
-        await bot.get_session().close() if hasattr(bot, 'get_session') else None
 
 if __name__ == "__main__":
     try:
