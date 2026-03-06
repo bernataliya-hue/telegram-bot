@@ -36,7 +36,7 @@ redis = None
 
 async def _check_redis_connection(redis_client: Redis) -> bool:
     try:
-        await asyncio.wait_for(redis_client.ping(), timeout=3)
+        await asyncio.wait_for(redis_client.ping(), timeout=0.7)
         return True
     except Exception as e:
         logging.warning(f"Redis недоступен, переключаемся на MemoryStorage: {e}")
@@ -46,7 +46,7 @@ async def _check_redis_connection(redis_client: Redis) -> bool:
 if REDIS_URL:
     candidate_redis = None
     try:
-        candidate_redis = Redis.from_url(REDIS_URL)
+        candidate_redis = Redis.from_url(REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
         redis_ok = asyncio.run(_check_redis_connection(candidate_redis))
     except Exception as e:
         logging.warning(f"Не удалось создать/проверить Redis, переключаемся на MemoryStorage: {e}")
@@ -57,6 +57,11 @@ if REDIS_URL:
         storage = RedisStorage(redis=redis)
         logging.info("Используется RedisStorage")
     else:
+        if candidate_redis is not None:
+            try:
+                asyncio.run(candidate_redis.aclose())
+            except Exception:
+                pass
         storage = MemoryStorage()
         logging.warning("Используется MemoryStorage (FSM-состояние не сохраняется между перезапусками)")
 else:
@@ -149,24 +154,21 @@ async def get_thinking(game_id: int):
     rows = execute_query("SELECT user_id FROM thinking_players WHERE game_id = %s", (game_id,), fetch=True)
     return [r[0] for r in rows]
 
-def get_late_key(game_id: int) -> str:
-    return f"late_players:{game_id}"
-
 async def mark_late(user_id: int, game_id: int):
-    if not redis:
-        return
-    await redis.sadd(get_late_key(game_id), user_id)
+    execute_query(
+        "INSERT INTO late_players (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+        (user_id, game_id)
+    )
 
 async def unmark_late(user_id: int, game_id: int):
-    if not redis:
-        return
-    await redis.srem(get_late_key(game_id), user_id)
+    execute_query(
+        "DELETE FROM late_players WHERE user_id = %s AND game_id = %s",
+        (user_id, game_id)
+    )
 
 async def get_late_players(game_id: int):
-    if not redis:
-        return set()
-    rows = await redis.smembers(get_late_key(game_id))
-    return {int(uid) for uid in rows}
+    rows = execute_query("SELECT user_id FROM late_players WHERE game_id = %s", (game_id,), fetch=True)
+    return {int(uid) for (uid,) in rows}
 
 def late_button_keyboard(game_id: int):
     builder = InlineKeyboardBuilder()
@@ -862,7 +864,12 @@ async def register_game(message: types.Message, state: FSMContext):
 
         # Удаляем из списка думающих при регистрации
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
-        execute_query("INSERT INTO registrations (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (message.from_user.id, game_id))
+        execute_query("""
+            INSERT INTO registrations (user_id, game_id, status)
+            VALUES (%s, %s, 'registered')
+            ON CONFLICT (user_id, game_id)
+            DO UPDATE SET status = 'registered'
+        """, (message.from_user.id, game_id))
         rules = get_game_rules(game_name)
         cost = get_game_cost(game_name)
         await message.answer(f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"

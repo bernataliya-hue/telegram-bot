@@ -53,6 +53,14 @@ def init_db():
     """)
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS late_players (
+        user_id BIGINT,
+        game_id INTEGER,
+        PRIMARY KEY(user_id, game_id)
+    )
+    """)
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
