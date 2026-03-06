@@ -155,18 +155,26 @@ async def get_thinking(game_id: int):
 
 async def mark_late(user_id: int, game_id: int):
     execute_query(
-        "INSERT INTO late_players (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+        """
+        UPDATE registrations
+        SET is_late = TRUE
+        WHERE user_id = %s AND game_id = %s AND status = 'registered'
+        """,
         (user_id, game_id)
     )
 
 async def unmark_late(user_id: int, game_id: int):
     execute_query(
-        "DELETE FROM late_players WHERE user_id = %s AND game_id = %s",
+        "UPDATE registrations SET is_late = FALSE WHERE user_id = %s AND game_id = %s",
         (user_id, game_id)
     )
 
 async def get_late_players(game_id: int):
-    rows = execute_query("SELECT user_id FROM late_players WHERE game_id = %s", (game_id,), fetch=True)
+    rows = execute_query(
+        "SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered' AND is_late = TRUE",
+        (game_id,),
+        fetch=True
+    )
     return {int(uid) for (uid,) in rows}
 
 def late_button_keyboard(game_id: int):
@@ -864,10 +872,10 @@ async def register_game(message: types.Message, state: FSMContext):
         # Удаляем из списка думающих при регистрации
         execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (message.from_user.id, game_id))
         execute_query("""
-            INSERT INTO registrations (user_id, game_id, status)
-            VALUES (%s, %s, 'registered')
+            INSERT INTO registrations (user_id, game_id, status, is_late)
+            VALUES (%s, %s, 'registered', FALSE)
             ON CONFLICT (user_id, game_id)
-            DO UPDATE SET status = 'registered'
+            DO UPDATE SET status = 'registered', is_late = FALSE
         """, (message.from_user.id, game_id))
         rules = get_game_rules(game_name)
         cost = get_game_cost(game_name)
@@ -990,10 +998,10 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
 
     # Регистрируем или обновляем статус
     execute_query("""
-        INSERT INTO registrations (user_id, game_id, status)
-        VALUES (%s, %s, 'registered')
+        INSERT INTO registrations (user_id, game_id, status, is_late)
+        VALUES (%s, %s, 'registered', FALSE)
         ON CONFLICT (user_id, game_id)
-        DO UPDATE SET status = 'registered'
+        DO UPDATE SET status = 'registered', is_late = FALSE
     """, (user_id, game_id))
 
     rules = get_game_rules(game_name)
