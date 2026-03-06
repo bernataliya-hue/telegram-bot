@@ -298,6 +298,26 @@ def get_game_cost(game_name):
         return city_rules
     return "\n"
 
+async def wake_up_all_users():
+    users = execute_query("SELECT user_id FROM users", fetch=True)
+    if not users:
+        logging.info("Нет пользователей для wake-up уведомления")
+        return
+
+    sent = 0
+    for (user_id,) in users:
+        try:
+            await bot.send_message(
+                user_id,
+                "✅ Бот снова на связи после обновления. Можно пользоваться как обычно."
+            )
+            sent += 1
+            await asyncio.sleep(0.03)
+        except Exception as e:
+            logging.warning(f"Wake-up: не удалось отправить сообщение пользователю {user_id}: {e}")
+
+    logging.info(f"Wake-up завершен: уведомлено {sent}/{len(users)} пользователей")
+
 # ===================== /start и профиль =====================
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
@@ -1511,6 +1531,8 @@ async def main():
     try:
         # Удаляем вебхук перед запуском polling, чтобы избежать конфликтов
         await bot.delete_webhook(drop_pending_updates=False)
+        # Пробуждаем пользователей после обновления, чтобы не требовалось ручное переоткрытие диалога
+        await wake_up_all_users()
         # Оставляем pending updates, чтобы пользователям не приходилось заново нажимать кнопки после деплоя
         await dp.start_polling(bot, skip_updates=False)
     finally:
