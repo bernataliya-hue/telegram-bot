@@ -154,28 +154,65 @@ async def get_thinking(game_id: int):
     return [r[0] for r in rows]
 
 async def mark_late(user_id: int, game_id: int):
-    execute_query(
-        """
-        UPDATE registrations
-        SET is_late = TRUE
-        WHERE user_id = %s AND game_id = %s AND status = 'registered'
-        """,
-        (user_id, game_id)
-    )
+    try:
+        execute_query(
+            """
+            UPDATE registrations
+            SET is_late = TRUE
+            WHERE user_id = %s AND game_id = %s AND status = 'registered'
+            """,
+            (user_id, game_id)
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось обновить registrations.is_late: {e}")
+
+    # legacy-совместимость со старыми данными
+    try:
+        execute_query(
+            "INSERT INTO late_players (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (user_id, game_id)
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось записать late_players: {e}")
 
 async def unmark_late(user_id: int, game_id: int):
-    execute_query(
-        "UPDATE registrations SET is_late = FALSE WHERE user_id = %s AND game_id = %s",
-        (user_id, game_id)
-    )
+    try:
+        execute_query(
+            "UPDATE registrations SET is_late = FALSE WHERE user_id = %s AND game_id = %s",
+            (user_id, game_id)
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось сбросить registrations.is_late: {e}")
+
+    try:
+        execute_query(
+            "DELETE FROM late_players WHERE user_id = %s AND game_id = %s",
+            (user_id, game_id)
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось удалить late_players: {e}")
 
 async def get_late_players(game_id: int):
-    rows = execute_query(
-        "SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered' AND is_late = TRUE",
-        (game_id,),
-        fetch=True
-    )
-    return {int(uid) for (uid,) in rows}
+    late_ids = set()
+
+    try:
+        rows = execute_query(
+            "SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered' AND is_late = TRUE",
+            (game_id,),
+            fetch=True
+        )
+        late_ids.update(int(uid) for (uid,) in rows)
+    except Exception as e:
+        logging.warning(f"Не удалось прочитать registrations.is_late: {e}")
+
+    # fallback + совместимость с уже сохраненными отметками
+    try:
+        rows = execute_query("SELECT user_id FROM late_players WHERE game_id = %s", (game_id,), fetch=True)
+        late_ids.update(int(uid) for (uid,) in rows)
+    except Exception as e:
+        logging.warning(f"Не удалось прочитать late_players: {e}")
+
+    return late_ids
 
 def late_button_keyboard(game_id: int):
     builder = InlineKeyboardBuilder()
@@ -1473,13 +1510,11 @@ async def admin_broadcast_message_handler(message: types.Message, state: FSMCont
 async def main():
     try:
         # Удаляем вебхук перед запуском polling, чтобы избежать конфликтов
-        await bot.delete_webhook(drop_pending_updates=True)
-        # skip_updates=True в aiogram 3.x передается через drop_pending_updates в delete_webhook
-        # или напрямую в start_polling
-        await dp.start_polling(bot, skip_updates=True)
+        await bot.delete_webhook(drop_pending_updates=False)
+        # Оставляем pending updates, чтобы пользователям не приходилось заново нажимать кнопки после деплоя
+        await dp.start_polling(bot, skip_updates=False)
     finally:
         await bot.session.close()
-        await bot.get_session().close() if hasattr(bot, 'get_session') else None
 
 if __name__ == "__main__":
     try:
