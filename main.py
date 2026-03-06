@@ -34,29 +34,15 @@ bot = Bot(token=API_TOKEN)
 redis = None
 
 
-async def _check_redis_connection(redis_client: Redis) -> bool:
-    try:
-        await asyncio.wait_for(redis_client.ping(), timeout=3)
-        return True
-    except Exception as e:
-        logging.warning(f"Redis недоступен, переключаемся на MemoryStorage: {e}")
-        return False
-
-
 if REDIS_URL:
     candidate_redis = None
     try:
-        candidate_redis = Redis.from_url(REDIS_URL)
-        redis_ok = asyncio.run(_check_redis_connection(candidate_redis))
-    except Exception as e:
-        logging.warning(f"Не удалось создать/проверить Redis, переключаемся на MemoryStorage: {e}")
-        redis_ok = False
-
-    if redis_ok and candidate_redis is not None:
+        candidate_redis = Redis.from_url(REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
+        storage = RedisStorage(redis=candidate_redis)
         redis = candidate_redis
-        storage = RedisStorage(redis=redis)
         logging.info("Используется RedisStorage")
-    else:
+    except Exception as e:
+        logging.warning(f"Не удалось инициализировать RedisStorage, переключаемся на MemoryStorage: {e}")
         storage = MemoryStorage()
         logging.warning("Используется MemoryStorage (FSM-состояние не сохраняется между перезапусками)")
 else:
@@ -149,24 +135,21 @@ async def get_thinking(game_id: int):
     rows = execute_query("SELECT user_id FROM thinking_players WHERE game_id = %s", (game_id,), fetch=True)
     return [r[0] for r in rows]
 
-def get_late_key(game_id: int) -> str:
-    return f"late_players:{game_id}"
-
 async def mark_late(user_id: int, game_id: int):
-    if not redis:
-        return
-    await redis.sadd(get_late_key(game_id), user_id)
+    execute_query(
+        "INSERT INTO late_players (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+        (user_id, game_id)
+    )
 
 async def unmark_late(user_id: int, game_id: int):
-    if not redis:
-        return
-    await redis.srem(get_late_key(game_id), user_id)
+    execute_query(
+        "DELETE FROM late_players WHERE user_id = %s AND game_id = %s",
+        (user_id, game_id)
+    )
 
 async def get_late_players(game_id: int):
-    if not redis:
-        return set()
-    rows = await redis.smembers(get_late_key(game_id))
-    return {int(uid) for uid in rows}
+    rows = execute_query("SELECT user_id FROM late_players WHERE game_id = %s", (game_id,), fetch=True)
+    return {int(uid) for (uid,) in rows}
 
 def late_button_keyboard(game_id: int):
     builder = InlineKeyboardBuilder()
