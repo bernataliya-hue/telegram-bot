@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -428,33 +429,35 @@ def admin_menu_keyboard():
 
 def vk_main_menu_keyboard(user_id: int = None):
     keyboard = VkKeyboard(one_time=False)
-    keyboard.add_button("📝Записаться на игру", color=VkKeyboardColor.PRIMARY)
-    keyboard.add_button("❌Отменить запись", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("📝Записаться на игру", color=VkKeyboardColor.PRIMARY, payload={"command": "register"})
+    keyboard.add_button("❌Отменить запись", color=VkKeyboardColor.SECONDARY, payload={"command": "cancel_registration"})
     keyboard.add_line()
-    keyboard.add_button("📝 Обновить профиль", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("📝 Обновить профиль", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_profile"})
     keyboard.add_line()
-    keyboard.add_button("📅Расписание игр", color=VkKeyboardColor.SECONDARY)
-    keyboard.add_button("👥Список участников", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("📅Расписание игр", color=VkKeyboardColor.SECONDARY, payload={"command": "schedule"})
+    keyboard.add_button("👥Список участников", color=VkKeyboardColor.SECONDARY, payload={"command": "participants"})
     keyboard.add_line()
-    keyboard.add_button("📍Как до нас добраться?", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("📍Как до нас добраться?", color=VkKeyboardColor.SECONDARY, payload={"command": "location"})
     if user_id == make_internal_user_id(PLATFORM_VK, VK_ADMIN_ID):
         keyboard.add_line()
-        keyboard.add_button("⚙️ Админ-панель", color=VkKeyboardColor.POSITIVE)
+        keyboard.add_button("⚙️ Админ-панель", color=VkKeyboardColor.POSITIVE, payload={"command": "admin_panel"})
     return keyboard.get_keyboard()
 
 
 def vk_admin_menu_keyboard():
     keyboard = VkKeyboard(one_time=False)
-    keyboard.add_button("➕ Добавить игру", color=VkKeyboardColor.POSITIVE)
-    keyboard.add_button("❌ Удалить игру", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("➕ Добавить игру", color=VkKeyboardColor.POSITIVE, payload={"command": "admin_add_game"})
+    keyboard.add_button("❌ Удалить игру", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_delete_game"})
     keyboard.add_line()
-    keyboard.add_button("🚫 Отмена игры", color=VkKeyboardColor.SECONDARY)
-    keyboard.add_button("👥 Список участников", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("♻️ Восстановить игру", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_restore_game"})
+    keyboard.add_button("🚫 Отмена игры", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_cancel_game"})
     keyboard.add_line()
-    keyboard.add_button("🔔 Напомнить об игре", color=VkKeyboardColor.SECONDARY)
-    keyboard.add_button("📢 Рассылка", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("👥 Список участников", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_view_participants"})
+    keyboard.add_button("🔔 Напомнить об игре", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_reminder"})
     keyboard.add_line()
-    keyboard.add_button("🏠 Главное меню", color=VkKeyboardColor.PRIMARY)
+    keyboard.add_button("📢 Рассылка", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_broadcast"})
+    keyboard.add_line()
+    keyboard.add_button("🏠 Главное меню", color=VkKeyboardColor.PRIMARY, payload={"command": "main_menu"})
     return keyboard.get_keyboard()
 
 # Helper для "думающих" (теперь в БД)
@@ -1913,6 +1916,20 @@ def prompt_vk_main_menu(vk_user_id: int):
     clear_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id))
 
 
+def parse_vk_payload(payload_raw):
+    if not payload_raw:
+        return {}
+    if isinstance(payload_raw, dict):
+        return payload_raw
+    if isinstance(payload_raw, str):
+        try:
+            parsed = json.loads(payload_raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            logging.warning("Не удалось распарсить payload VK: %s", payload_raw)
+    return {}
+
+
 def vk_number_choice_keyboard(items_count: int, back_label: str = "🔙 Назад"):
     keyboard = VkKeyboard(one_time=True)
     per_row = 4
@@ -1920,11 +1937,15 @@ def vk_number_choice_keyboard(items_count: int, back_label: str = "🔙 Наза
     for index in range(items_count):
         if index > 0 and index % per_row == 0:
             keyboard.add_line()
-        keyboard.add_button(str(index + 1), color=VkKeyboardColor.PRIMARY)
+        keyboard.add_button(
+            str(index + 1),
+            color=VkKeyboardColor.PRIMARY,
+            payload={"select_index": index}
+        )
 
     if back_label:
         keyboard.add_line()
-        keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY)
+        keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
 
     return keyboard.get_keyboard()
 
@@ -1934,22 +1955,22 @@ def vk_option_keyboard(labels, back_label: str = "🔙 Назад"):
     for index, label in enumerate(labels):
         if index > 0:
             keyboard.add_line()
-        keyboard.add_button(label, color=VkKeyboardColor.PRIMARY)
+        keyboard.add_button(label, color=VkKeyboardColor.PRIMARY, payload={"select_label": label})
     if back_label:
         keyboard.add_line()
-        keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY)
+        keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
     return keyboard.get_keyboard()
 
 
 def vk_game_type_keyboard():
     keyboard = VkKeyboard(one_time=True)
-    keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.PRIMARY)
+    keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.PRIMARY, payload={"game_type": "🏙️Городская мафия"})
     keyboard.add_line()
-    keyboard.add_button("🌃Спортивная мафия", color=VkKeyboardColor.PRIMARY)
+    keyboard.add_button("🌃Спортивная мафия", color=VkKeyboardColor.PRIMARY, payload={"game_type": "🌃Спортивная мафия"})
     keyboard.add_line()
-    keyboard.add_button("🏆Рейтинговая игра", color=VkKeyboardColor.PRIMARY)
+    keyboard.add_button("🏆Рейтинговая игра", color=VkKeyboardColor.PRIMARY, payload={"game_type": "🏆Рейтинговая игра"})
     keyboard.add_line()
-    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
     return keyboard.get_keyboard()
 
 
@@ -1960,12 +1981,12 @@ def vk_calendar_keyboard(year: int, month: int):
     for day in range(1, days_in_month + 1):
         if day > 1 and (day - 1) % 7 == 0:
             keyboard.add_line()
-        keyboard.add_button(str(day), color=VkKeyboardColor.PRIMARY)
+        keyboard.add_button(str(day), color=VkKeyboardColor.PRIMARY, payload={"calendar_day": day})
 
-    keyboard.add_button("◀️ Месяц", color=VkKeyboardColor.SECONDARY)
-    keyboard.add_button("▶️ Месяц", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("◀️ Месяц", color=VkKeyboardColor.SECONDARY, payload={"calendar_shift": -1})
+    keyboard.add_button("▶️ Месяц", color=VkKeyboardColor.SECONDARY, payload={"calendar_shift": 1})
     keyboard.add_line()
-    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
     return keyboard.get_keyboard()
 
 
@@ -1983,15 +2004,28 @@ def shift_year_month(year: int, month: int, delta: int):
 
 def vk_audience_keyboard():
     keyboard = VkKeyboard(one_time=True)
-    keyboard.add_button("👥 Всем пользователям", color=VkKeyboardColor.PRIMARY)
+    keyboard.add_button("👥 Всем пользователям", color=VkKeyboardColor.PRIMARY, payload={"audience": "all"})
     keyboard.add_line()
-    keyboard.add_button("✅ Только записавшимся", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("✅ Только записавшимся", color=VkKeyboardColor.SECONDARY, payload={"audience": "registered"})
     keyboard.add_line()
-    keyboard.add_button("❌ Только не записавшимся", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("❌ Только не записавшимся", color=VkKeyboardColor.SECONDARY, payload={"audience": "not_registered"})
     keyboard.add_line()
-    keyboard.add_button("👤 Выбрать пользователей", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("👤 Выбрать пользователей", color=VkKeyboardColor.SECONDARY, payload={"audience": "custom"})
     keyboard.add_line()
-    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
+    return keyboard.get_keyboard()
+
+
+def vk_back_keyboard():
+    keyboard = VkKeyboard(one_time=True)
+    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
+    return keyboard.get_keyboard()
+
+
+def vk_yes_no_keyboard():
+    keyboard = VkKeyboard(one_time=True)
+    keyboard.add_button("Да", color=VkKeyboardColor.SECONDARY, payload={"answer": "yes"})
+    keyboard.add_button("Нет", color=VkKeyboardColor.SECONDARY, payload={"answer": "no"})
     return keyboard.get_keyboard()
 
 
@@ -2022,24 +2056,26 @@ def send_vk_games_list(vk_user_id: int, games, action: str, title: str, back_lab
         return
 
     lines = [title]
-    game_labels = []
-    for _, game_name, game_date in games:
-        label = f"{game_date} {game_name}"
-        game_labels.append(label)
-        lines.append(f"• {label}")
+    for index, (_, game_name, game_date) in enumerate(games, start=1):
+        lines.append(f"{index}. {game_date} {game_name}")
     lines.append("")
-    lines.append("Выбери игру кнопкой ниже.")
-    send_vk_message(vk_user_id, "\n".join(lines), vk_option_keyboard(game_labels, back_label=back_label))
-    set_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id), action, games=games, game_labels=game_labels)
+    lines.append("Выбери игру кнопкой ниже или отправь её номер сообщением.")
+    send_vk_message(vk_user_id, "\n".join(lines), vk_number_choice_keyboard(len(games), back_label=back_label))
+    set_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id), action, games=games)
 
 
-def get_vk_selected_game(state, selected_text: str):
-    game_labels = state.get("game_labels", [])
+def get_vk_selected_game(state, selected_text: str, payload: dict = None):
+    payload = payload or {}
     games = state.get("games", [])
-    if selected_text not in game_labels:
+
+    if isinstance(payload.get("select_index"), int):
+        index = payload["select_index"]
+    elif selected_text.isdigit():
+        index = int(selected_text) - 1
+    else:
         return None
-    index = game_labels.index(selected_text)
-    if index >= len(games):
+
+    if index < 0 or index >= len(games):
         return None
     return games[index]
 
@@ -2054,7 +2090,7 @@ def send_vk_user_selection_list(vk_user_id: int, users, title: str):
         lines.append(f"{index}. {first_name} {last_name} ({nick})")
     lines.append("")
     lines.append("Отправь номера пользователей через запятую, например: 1,3,5")
-    send_vk_message(vk_user_id, "\n".join(lines))
+    send_vk_message(vk_user_id, "\n".join(lines), vk_back_keyboard())
 
 
 async def handle_vk_registration(internal_user_id: int, game_id: int):
@@ -2189,17 +2225,20 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
     return False
 
 
-async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str):
+async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str, payload: dict = None):
     state = get_vk_state(internal_user_id)
     current = state.get("state")
     normalized_text = text.strip()
+    payload = payload or {}
+    command = payload.get("command")
+    audience = payload.get("audience")
 
-    if normalized_text == "🏠 Главное меню":
+    if normalized_text == "🏠 Главное меню" or command == "main_menu":
         clear_vk_state(internal_user_id)
         send_vk_message(vk_user_id, "Возвращаюсь в главное меню.", vk_main_menu_keyboard(internal_user_id))
         return True
 
-    if normalized_text == "🔙 Назад":
+    if normalized_text == "🔙 Назад" or command == "back":
         if current == "admin_add_type":
             selected_year = state.get("calendar_year", datetime.date.today().year)
             selected_month = state.get("calendar_month", datetime.date.today().month)
@@ -2215,13 +2254,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         elif current == "admin_reminder_custom_users":
             set_vk_state(internal_user_id, "admin_reminder_audience", reminder_game_id=state.get("reminder_game_id"))
             send_vk_message(vk_user_id, "Кому отправить напоминание?", vk_audience_keyboard())
-        elif current == "admin_broadcast_game":
-            set_vk_state(internal_user_id, "admin_broadcast_audience")
-            send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
-        elif current == "admin_broadcast_custom_users":
-            set_vk_state(internal_user_id, "admin_broadcast_audience")
-            send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
-        elif current == "admin_broadcast_message":
+        elif current in {"admin_broadcast_game", "admin_broadcast_custom_users", "admin_broadcast_message"}:
             set_vk_state(internal_user_id, "admin_broadcast_audience")
             send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
         else:
@@ -2233,8 +2266,11 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         selected_year = state.get("calendar_year", datetime.date.today().year)
         selected_month = state.get("calendar_month", datetime.date.today().month)
 
-        if normalized_text == "◀️ Месяц":
-            new_year, new_month = shift_year_month(selected_year, selected_month, -1)
+        if normalized_text in {"◀️ Месяц", "▶️ Месяц"} or isinstance(payload.get("calendar_shift"), int):
+            delta = payload.get("calendar_shift")
+            if not isinstance(delta, int):
+                delta = -1 if normalized_text == "◀️ Месяц" else 1
+            new_year, new_month = shift_year_month(selected_year, selected_month, delta)
             set_vk_state(internal_user_id, "admin_add_date", calendar_year=new_year, calendar_month=new_month)
             send_vk_message(
                 vk_user_id,
@@ -2243,18 +2279,8 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             )
             return True
 
-        if normalized_text == "▶️ Месяц":
-            new_year, new_month = shift_year_month(selected_year, selected_month, 1)
-            set_vk_state(internal_user_id, "admin_add_date", calendar_year=new_year, calendar_month=new_month)
-            send_vk_message(
-                vk_user_id,
-                f"Выбери дату игры: {new_month:02d}.{new_year}",
-                vk_calendar_keyboard(new_year, new_month)
-            )
-            return True
-
-        if normalized_text.isdigit():
-            day = int(normalized_text)
+        if isinstance(payload.get("calendar_day"), int) or normalized_text.isdigit():
+            day = payload["calendar_day"] if isinstance(payload.get("calendar_day"), int) else int(normalized_text)
             try:
                 parsed = datetime.date(selected_year, selected_month, day)
             except ValueError:
@@ -2298,7 +2324,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             "🌃спортивная мафия": "🌃Спортивная мафия",
             "🏆рейтинговая игра": "🏆Рейтинговая игра",
         }
-        selected_type = game_types.get(text.strip().lower())
+        selected_type = payload.get("game_type") or game_types.get(text.strip().lower())
         if not selected_type:
             send_vk_message(vk_user_id, "Пожалуйста, выбери тип игры кнопкой ниже.", vk_game_type_keyboard())
             return True
@@ -2309,7 +2335,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         return True
 
     if current == "admin_reminder_game":
-        selected_game = get_vk_selected_game(state, normalized_text)
+        selected_game = get_vk_selected_game(state, normalized_text, payload)
         if not selected_game:
             send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return True
@@ -2325,16 +2351,16 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
 
     if current == "admin_reminder_audience":
         game_id = state.get("reminder_game_id")
-        if normalized_text == "👥 Всем пользователям":
+        if normalized_text == "👥 Всем пользователям" or audience == "all":
             rows = execute_query("SELECT user_id FROM users", fetch=True)
             target_users = [r[0] for r in rows]
-        elif normalized_text == "✅ Только записавшимся":
+        elif normalized_text == "✅ Только записавшимся" or audience == "registered":
             rows = execute_query("SELECT user_id FROM registrations WHERE game_id = %s", (game_id,), fetch=True)
             target_users = [r[0] for r in rows]
-        elif normalized_text == "❌ Только не записавшимся":
+        elif normalized_text == "❌ Только не записавшимся" or audience == "not_registered":
             rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = %s)", (game_id,), fetch=True)
             target_users = [r[0] for r in rows]
-        elif normalized_text == "👤 Выбрать пользователей":
+        elif normalized_text == "👤 Выбрать пользователей" or audience == "custom":
             users = execute_query("SELECT user_id, first_name, last_name, mafia_nick FROM users", fetch=True)
             set_vk_state(internal_user_id, "admin_reminder_custom_users", reminder_game_id=game_id, selectable_users=users)
             send_vk_user_selection_list(vk_user_id, users, "Выбери пользователей для напоминания:")
@@ -2353,10 +2379,10 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         try:
             indexes = [int(item.strip()) - 1 for item in normalized_text.split(",") if item.strip()]
         except ValueError:
-            send_vk_message(vk_user_id, "Не удалось распознать номера. Отправь их через запятую, например: 1,3,5")
+            send_vk_message(vk_user_id, "Не удалось распознать номера. Отправь их через запятую, например: 1,3,5", vk_back_keyboard())
             return True
         if not indexes or any(index < 0 or index >= len(users) for index in indexes):
-            send_vk_message(vk_user_id, "Проверь номера пользователей и попробуй еще раз.")
+            send_vk_message(vk_user_id, "Проверь номера пользователей и попробуй еще раз.", vk_back_keyboard())
             return True
         target_users = [users[index][0] for index in indexes]
         count = await send_game_reminders(target_users, state.get("reminder_game_id"))
@@ -2365,18 +2391,23 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         return True
 
     if current == "admin_broadcast_audience":
-        if normalized_text == "👥 Всем пользователям":
+        if normalized_text == "👥 Всем пользователям" or audience == "all":
             rows = execute_query("SELECT user_id FROM users", fetch=True)
             target_users = [r[0] for r in rows]
             set_vk_state(internal_user_id, "admin_broadcast_message", broadcast_target_users=target_users)
-            send_vk_message(vk_user_id, "Введи сообщение для рассылки.")
+            send_vk_message(vk_user_id, "Введи сообщение для рассылки.", vk_back_keyboard())
             return True
-        if normalized_text in {"✅ Только записавшимся", "❌ Только не записавшимся"}:
-            set_vk_state(internal_user_id, "admin_broadcast_game", broadcast_filter_type=normalized_text)
+        if normalized_text in {"✅ Только записавшимся", "❌ Только не записавшимся"} or audience in {"registered", "not_registered"}:
+            filter_type = normalized_text
+            if audience == "registered":
+                filter_type = "✅ Только записавшимся"
+            elif audience == "not_registered":
+                filter_type = "❌ Только не записавшимся"
+            set_vk_state(internal_user_id, "admin_broadcast_game", broadcast_filter_type=filter_type)
             games = fetch_upcoming_games()
             send_vk_games_list(vk_user_id, games, "admin_broadcast_game", "Для какой игры отфильтровать аудиторию?")
             return True
-        if normalized_text == "👤 Выбрать пользователей":
+        if normalized_text == "👤 Выбрать пользователей" or audience == "custom":
             users = execute_query("SELECT user_id, first_name, last_name, mafia_nick FROM users", fetch=True)
             set_vk_state(internal_user_id, "admin_broadcast_custom_users", selectable_users=users)
             send_vk_user_selection_list(vk_user_id, users, "Выбери пользователей для рассылки:")
@@ -2389,18 +2420,18 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         try:
             indexes = [int(item.strip()) - 1 for item in normalized_text.split(",") if item.strip()]
         except ValueError:
-            send_vk_message(vk_user_id, "Не удалось распознать номера. Отправь их через запятую, например: 1,3,5")
+            send_vk_message(vk_user_id, "Не удалось распознать номера. Отправь их через запятую, например: 1,3,5", vk_back_keyboard())
             return True
         if not indexes or any(index < 0 or index >= len(users) for index in indexes):
-            send_vk_message(vk_user_id, "Проверь номера пользователей и попробуй еще раз.")
+            send_vk_message(vk_user_id, "Проверь номера пользователей и попробуй еще раз.", vk_back_keyboard())
             return True
         target_users = [users[index][0] for index in indexes]
         set_vk_state(internal_user_id, "admin_broadcast_message", broadcast_target_users=target_users)
-        send_vk_message(vk_user_id, "Введи сообщение для рассылки.")
+        send_vk_message(vk_user_id, "Введи сообщение для рассылки.", vk_back_keyboard())
         return True
 
     if current == "admin_broadcast_game":
-        selected_game = get_vk_selected_game(state, normalized_text)
+        selected_game = get_vk_selected_game(state, normalized_text, payload)
         if not selected_game:
             send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return True
@@ -2417,7 +2448,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             )
             target_users = [r[0] for r in rows]
         set_vk_state(internal_user_id, "admin_broadcast_message", broadcast_target_users=target_users)
-        send_vk_message(vk_user_id, "Введи сообщение для рассылки.")
+        send_vk_message(vk_user_id, "Введи сообщение для рассылки.", vk_back_keyboard())
         return True
 
     if current == "admin_broadcast_message":
@@ -2433,16 +2464,21 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         send_vk_message(vk_user_id, f"Сообщение отправлено {count} пользователям.", vk_admin_menu_keyboard())
         return True
 
-    if current in {"admin_delete_game", "admin_cancel_game", "admin_view_participants"}:
-        selected_game = get_vk_selected_game(state, normalized_text)
+    if current in {"admin_delete_game", "admin_restore_game", "admin_cancel_game", "admin_view_participants"}:
+        selected_game = get_vk_selected_game(state, normalized_text, payload)
         if not selected_game:
             send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return True
-        game_id, game_name, game_date = selected_game
+        game_id, game_name, game_date = selected_game[:3]
         if current == "admin_delete_game":
             execute_query("UPDATE games SET is_deleted = TRUE WHERE game_id = %s", (game_id,))
             clear_vk_state(internal_user_id)
             send_vk_message(vk_user_id, f"Игра '{game_date} {game_name}' удалена.", vk_admin_menu_keyboard())
+            return True
+        if current == "admin_restore_game":
+            execute_query("UPDATE games SET is_deleted = FALSE WHERE game_id = %s", (game_id,))
+            clear_vk_state(internal_user_id)
+            send_vk_message(vk_user_id, f"Игра '{game_date} {game_name}' восстановлена.", vk_admin_menu_keyboard())
             return True
         if current == "admin_cancel_game":
             participants = execute_query("SELECT user_id FROM registrations WHERE game_id = %s", (game_id,), fetch=True)
@@ -2464,8 +2500,10 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
     return False
 
 
-async def handle_vk_message(vk_user_id: int, text: str):
+async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
     normalized_text = (text or "").strip()
+    payload = parse_vk_payload(payload_raw)
+    command = payload.get("command")
     internal_user_id = make_internal_user_id(PLATFORM_VK, vk_user_id)
     user_exists = execute_query("SELECT 1 FROM users WHERE user_id = %s", (internal_user_id,), fetchone=True)
 
@@ -2488,21 +2526,21 @@ async def handle_vk_message(vk_user_id: int, text: str):
     if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text):
         return
 
-    if await handle_vk_admin_flow(internal_user_id, vk_user_id, normalized_text):
+    if await handle_vk_admin_flow(internal_user_id, vk_user_id, normalized_text, payload):
         return
 
     state = get_vk_state(internal_user_id)
     current = state.get("state")
-    if normalized_text == "🔙 Назад":
+    if normalized_text == "🔙 Назад" or command == "back":
         prompt_vk_main_menu(vk_user_id)
         return
 
-    if normalized_text == "🏠 Главное меню":
+    if normalized_text == "🏠 Главное меню" or command == "main_menu":
         prompt_vk_main_menu(vk_user_id)
         return
 
     if current == "vk_register_select":
-        selected_game = get_vk_selected_game(state, normalized_text)
+        selected_game = get_vk_selected_game(state, normalized_text, payload)
         if not selected_game:
             send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return
@@ -2512,7 +2550,7 @@ async def handle_vk_message(vk_user_id: int, text: str):
         return
 
     if current == "vk_cancel_select":
-        selected_game = get_vk_selected_game(state, normalized_text)
+        selected_game = get_vk_selected_game(state, normalized_text, payload)
         if not selected_game:
             send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return
@@ -2522,7 +2560,7 @@ async def handle_vk_message(vk_user_id: int, text: str):
         return
 
     if current == "vk_participants_select":
-        selected_game = get_vk_selected_game(state, normalized_text)
+        selected_game = get_vk_selected_game(state, normalized_text, payload)
         if not selected_game:
             send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return
@@ -2535,11 +2573,11 @@ async def handle_vk_message(vk_user_id: int, text: str):
         clear_vk_state(internal_user_id)
         return
 
-    if normalized_text == "📝Записаться на игру":
+    if normalized_text == "📝Записаться на игру" or command == "register":
         send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_register_select", "Выбери игру для записи:")
         return
 
-    if normalized_text == "❌Отменить запись":
+    if normalized_text == "❌Отменить запись" or command == "cancel_registration":
         games = execute_query(
             """
             SELECT g.game_id, g.game_name, g.game_date
@@ -2554,12 +2592,12 @@ async def handle_vk_message(vk_user_id: int, text: str):
         send_vk_games_list(vk_user_id, games, "vk_cancel_select", "Выбери игру, запись на которую хочешь отменить:")
         return
 
-    if normalized_text == "📝 Обновить профиль":
+    if normalized_text == "📝 Обновить профиль" or command == "edit_profile":
         set_vk_state(internal_user_id, "vk_edit_profile_nick")
-        send_vk_message(vk_user_id, "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?")
+        send_vk_message(vk_user_id, "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?", vk_back_keyboard())
         return
 
-    if normalized_text == "📅Расписание игр":
+    if normalized_text == "📅Расписание игр" or command == "schedule":
         games = fetch_upcoming_games()
         if not games:
             send_vk_message(vk_user_id, "Игр пока не запланировано.", vk_main_menu_keyboard(internal_user_id))
@@ -2571,11 +2609,11 @@ async def handle_vk_message(vk_user_id: int, text: str):
         send_vk_message(vk_user_id, "\n".join(line for line in lines if line), vk_main_menu_keyboard(internal_user_id))
         return
 
-    if normalized_text == "👥Список участников":
+    if normalized_text == "👥Список участников" or command == "participants":
         send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_participants_select", "Выбери игру, список участников которой хочешь посмотреть:")
         return
 
-    if normalized_text == "📍Как до нас добраться?":
+    if normalized_text == "📍Как до нас добраться?" or command == "location":
         send_vk_message(
             vk_user_id,
             "Мы находимся по адресу:\nг. Королев, ул. Декабристов, д. 8\nВход со стороны дороги, стеклянная дверь с надписью «Тайная комната».",
@@ -2583,12 +2621,12 @@ async def handle_vk_message(vk_user_id: int, text: str):
         )
         return
 
-    if normalized_text == "⚙️ Админ-панель" and vk_user_id == VK_ADMIN_ID:
+    if (normalized_text == "⚙️ Админ-панель" or command == "admin_panel") and vk_user_id == VK_ADMIN_ID:
         send_vk_message(vk_user_id, "Добро пожаловать в админ-панель.", vk_admin_menu_keyboard())
         clear_vk_state(internal_user_id)
         return
 
-    if vk_user_id == VK_ADMIN_ID and normalized_text == "➕ Добавить игру":
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "➕ Добавить игру" or command == "admin_add_game"):
         today = datetime.date.today()
         set_vk_state(internal_user_id, "admin_add_date", calendar_year=today.year, calendar_month=today.month)
         send_vk_message(
@@ -2598,33 +2636,35 @@ async def handle_vk_message(vk_user_id: int, text: str):
         )
         return
 
-    if vk_user_id == VK_ADMIN_ID and normalized_text == "❌ Удалить игру":
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "❌ Удалить игру" or command == "admin_delete_game"):
         games = fetch_active_games()
         send_vk_games_list(vk_user_id, games, "admin_delete_game", "Какую игру удалить?")
         return
 
-    if vk_user_id == VK_ADMIN_ID and normalized_text == "🚫 Отмена игры":
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "♻️ Восстановить игру" or command == "admin_restore_game"):
+        games = fetch_active_games(include_deleted=True)
+        deleted_games = [game[:3] for game in games if len(game) > 3 and game[3]]
+        send_vk_games_list(vk_user_id, deleted_games, "admin_restore_game", "Какую игру восстановить?")
+        return
+
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "🚫 Отмена игры" or command == "admin_cancel_game"):
         games = fetch_active_games()
         send_vk_games_list(vk_user_id, games, "admin_cancel_game", "Какую игру отменить?")
         return
 
-    if vk_user_id == VK_ADMIN_ID and normalized_text == "👥 Список участников":
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "👥 Список участников" or command == "admin_view_participants"):
         games = fetch_active_games()
         send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?")
         return
 
-    if vk_user_id == VK_ADMIN_ID and normalized_text == "🔔 Напомнить об игре":
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "🔔 Напомнить об игре" or command == "admin_reminder"):
         games = fetch_upcoming_games()
         send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?")
         return
 
-    if vk_user_id == VK_ADMIN_ID and normalized_text == "📢 Рассылка":
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "📢 Рассылка" or command == "admin_broadcast"):
         set_vk_state(internal_user_id, "admin_broadcast_audience")
         send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
-        return
-
-    if normalized_text == "🏠 Главное меню":
-        prompt_vk_main_menu(vk_user_id)
         return
 
     send_vk_message(vk_user_id, "Не понял команду. Пожалуйста, используй кнопки меню.", vk_main_menu_keyboard(internal_user_id))
@@ -2677,7 +2717,8 @@ def vk_polling_loop(loop: asyncio.AbstractEventLoop):
                 continue
 
             text = message.get("text", "")
-            future = asyncio.run_coroutine_threadsafe(handle_vk_message(message["from_id"], text), loop)
+            payload = message.get("payload")
+            future = asyncio.run_coroutine_threadsafe(handle_vk_message(message["from_id"], text, payload), loop)
             try:
                 future.result()
             except Exception as exc:
