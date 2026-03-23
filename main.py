@@ -68,6 +68,7 @@ if REDIS_URL:
 
     if redis_ok and candidate_redis is not None:
         redis = candidate_redis
+        storage = RedisStorage(redis=redis)
         logging.info("Используется RedisStorage")
     else:
         if candidate_redis is not None:
