@@ -48,36 +48,15 @@ vk_longpoll = None
 vk_states = {}
 
 
-async def _check_redis_connection(redis_client: Redis) -> bool:
-    try:
-        await asyncio.wait_for(redis_client.ping(), timeout=0.7)
-        return True
-    except Exception as e:
-        logging.warning(f"Redis недоступен, переключаемся на MemoryStorage: {e}")
-        return False
-
-
 if REDIS_URL:
-    candidate_redis = None
     try:
-        candidate_redis = Redis.from_url(REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
-        redis_ok = asyncio.run(_check_redis_connection(candidate_redis))
-    except Exception as e:
-        logging.warning(f"Не удалось создать/проверить Redis, переключаемся на MemoryStorage: {e}")
-        redis_ok = False
-
-    if redis_ok and candidate_redis is not None:
-        redis = candidate_redis
+        redis = Redis.from_url(REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
         storage = RedisStorage(redis=redis)
         logging.info("Используется RedisStorage")
-    else:
-        if candidate_redis is not None:
-            try:
-                asyncio.run(candidate_redis.aclose())
-            except Exception:
-                pass
+    except Exception as e:
+        redis = None
         storage = MemoryStorage()
-        logging.warning("Используется MemoryStorage (FSM-состояние не сохраняется между перезапусками)")
+        logging.warning(f"Не удалось настроить RedisStorage, переключаемся на MemoryStorage: {e}")
 else:
     storage = MemoryStorage()
     logging.warning("REDIS_URL не задан. Используется MemoryStorage (FSM-состояние не сохраняется между перезапусками)")

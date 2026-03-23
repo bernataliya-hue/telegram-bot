@@ -1,4 +1,5 @@
 import os
+import time
 import psycopg2
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -6,7 +7,16 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 def get_connection():
     if not DATABASE_URL:
         raise ValueError("❌ Не задан DATABASE_URL в переменных окружения")
-    return psycopg2.connect(DATABASE_URL)
+    last_error = None
+    for attempt in range(5):
+        try:
+            return psycopg2.connect(DATABASE_URL)
+        except psycopg2.OperationalError as exc:
+            last_error = exc
+            if attempt == 4:
+                raise
+            time.sleep(2)
+    raise last_error
 
 def init_db():
     conn = get_connection()
