@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import uuid
+import calendar
 import database
 
 from aiogram import Bot, Dispatcher, types, F
@@ -28,7 +29,9 @@ API_TOKEN = (
     or os.environ.get("BOT_TOKEN")
     or os.environ.get("TELEGRAM_TOKEN")
 )
-VK_TOKEN = os.environ.get("VK_BOT_TOKEN") or os.environ.get("VK_TOKEN")
+VK_BOT_TOKEN_ENV = os.environ.get("VK_BOT_TOKEN")
+VK_TOKEN_ENV = os.environ.get("VK_TOKEN")
+VK_TOKEN = VK_BOT_TOKEN_ENV or VK_TOKEN_ENV
 VK_GROUP_ID = os.environ.get("VK_GROUP_ID")
 ADMIN_ID = 2127578673
 VK_ADMIN_ID = int(os.environ.get("VK_ADMIN_ID") or ADMIN_ID)
@@ -46,6 +49,14 @@ vk_session = None
 vk_api_client = None
 vk_longpoll = None
 vk_states = {}
+
+
+def mask_secret(secret: str) -> str:
+    if not secret:
+        return "missing"
+    if len(secret) <= 8:
+        return "*" * len(secret)
+    return f"{secret[:4]}...{secret[-4:]}"
 
 
 if REDIS_URL:
@@ -212,12 +223,16 @@ def build_game_title(game_name: str, game_date: str) -> str:
 
 def fetch_active_games(include_deleted: bool = False):
     if include_deleted:
-        return execute_query("SELECT game_id, game_name, game_date, is_deleted FROM games ORDER BY game_date, game_id", fetch=True)
-    return execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE ORDER BY game_date, game_id", fetch=True)
+        return sort_games_by_date(
+            execute_query("SELECT game_id, game_name, game_date, is_deleted FROM games", fetch=True)
+        )
+    return sort_games_by_date(
+        execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
+    )
 
 
 def fetch_upcoming_games():
-    return filter_upcoming_games(fetch_active_games())
+    return sort_games_by_date(filter_upcoming_games(fetch_active_games()))
 
 
 def format_user_participants(game_id: int, title: str) -> str:
@@ -308,6 +323,9 @@ class Form(StatesGroup):
     get_lastname = State()
     get_nick = State()
     get_age = State()
+    edit_profile_nick = State()
+    edit_profile_name = State()
+    edit_profile_lastname = State()
     menu = State()
     user_view_participants = State()
     game_registration = State()
@@ -335,6 +353,7 @@ def main_menu_keyboard(user_id):
     builder = ReplyKeyboardBuilder()
     builder.button(text="📝Записаться на игру")
     builder.button(text="❌Отменить запись")
+    builder.button(text="📝 Обновить профиль")
     builder.button(text="📅Расписание игр")
     builder.button(text="👥Список участников")
     builder.button(text="📍Как до нас добраться?")
@@ -360,7 +379,9 @@ def admin_menu_keyboard():
 def vk_main_menu_keyboard(user_id: int = None):
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button("📝Записаться на игру", color=VkKeyboardColor.PRIMARY)
-    keyboard.add_button("❌Отменить запись", color=VkKeyboardColor.NEGATIVE)
+    keyboard.add_button("❌Отменить запись", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_line()
+    keyboard.add_button("📝 Обновить профиль", color=VkKeyboardColor.SECONDARY)
     keyboard.add_line()
     keyboard.add_button("📅Расписание игр", color=VkKeyboardColor.SECONDARY)
     keyboard.add_button("👥Список участников", color=VkKeyboardColor.SECONDARY)
@@ -375,10 +396,13 @@ def vk_main_menu_keyboard(user_id: int = None):
 def vk_admin_menu_keyboard():
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button("➕ Добавить игру", color=VkKeyboardColor.POSITIVE)
-    keyboard.add_button("❌ Удалить игру", color=VkKeyboardColor.NEGATIVE)
+    keyboard.add_button("❌ Удалить игру", color=VkKeyboardColor.SECONDARY)
     keyboard.add_line()
-    keyboard.add_button("🚫 Отмена игры", color=VkKeyboardColor.NEGATIVE)
+    keyboard.add_button("🚫 Отмена игры", color=VkKeyboardColor.SECONDARY)
     keyboard.add_button("👥 Список участников", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_line()
+    keyboard.add_button("🔔 Напомнить об игре", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("📢 Рассылка", color=VkKeyboardColor.SECONDARY)
     keyboard.add_line()
     keyboard.add_button("🏠 Главное меню", color=VkKeyboardColor.PRIMARY)
     return keyboard.get_keyboard()
@@ -484,6 +508,16 @@ def is_upcoming_game(game_date: str) -> bool:
 
 def filter_upcoming_games(games):
     return [game for game in games if is_upcoming_game(game[2])]
+
+
+def sort_games_by_date(games, date_index: int = 2):
+    def sort_key(game):
+        parsed = parse_game_date(game[date_index])
+        if parsed is None:
+            return (1, datetime.date.max, str(game[date_index]))
+        return (0, parsed, str(game[date_index]))
+
+    return sorted(games, key=sort_key)
 
 def get_game_limit(game_name: str) -> int:
     if "Рейтинговая игра" in game_name:
@@ -674,6 +708,41 @@ async def process_age(message: types.Message, state: FSMContext):
     )
     await state.set_state(Form.menu)
 
+
+@dp.message(Form.menu, F.text == "📝 Обновить профиль")
+async def edit_profile_start(message: types.Message, state: FSMContext):
+    await message.answer("Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?")
+    await state.set_state(Form.edit_profile_nick)
+
+
+@dp.message(Form.edit_profile_nick)
+async def edit_profile_nick_handler(message: types.Message, state: FSMContext):
+    await state.update_data(edit_mafia_nick=message.text)
+    await message.answer("Отлично! Теперь напиши своё имя.")
+    await state.set_state(Form.edit_profile_name)
+
+
+@dp.message(Form.edit_profile_name)
+async def edit_profile_name_handler(message: types.Message, state: FSMContext):
+    await state.update_data(edit_first_name=message.text)
+    await message.answer("И напоследок напиши свою фамилию.")
+    await state.set_state(Form.edit_profile_lastname)
+
+
+@dp.message(Form.edit_profile_lastname)
+async def edit_profile_lastname_handler(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    save_platform_profile(
+        platform=PLATFORM_TELEGRAM,
+        platform_user_id=message.from_user.id,
+        first_name=data["edit_first_name"],
+        last_name=message.text,
+        mafia_nick=data["edit_mafia_nick"],
+        telegram_username=message.from_user.username,
+    )
+    await message.answer("Профиль обновлен.", reply_markup=main_menu_keyboard(message.from_user.id))
+    await state.set_state(Form.menu)
+
 @dp.message(Form.menu, F.text == "⚙️ Админ-панель")
 async def admin_panel(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -687,7 +756,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Выберите дату игры:", reply_markup=await SimpleCalendar().start_calendar())
         await state.set_state(Form.add_game_date)
     elif message.text == "❌ Удалить игру":
-        games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
+        games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
         if not games:
             await message.answer("Список активных игр пуст.")
             return
@@ -699,7 +768,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Какую игру удалить?", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.delete_game)
     elif message.text == "♻️ Восстановить игру":
-        games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = TRUE", fetch=True)
+        games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = TRUE", fetch=True))
         if not games:
             await message.answer("Нет удаленных игр для восстановления.")
             return
@@ -711,7 +780,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Какую игру восстановить?", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.restore_game)
     elif message.text == "👥 Список участников":
-        games = execute_query("SELECT game_id, game_name, game_date FROM games", fetch=True)
+        games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games", fetch=True))
         if not games:
             await message.answer("Список игр пуст.")
             return
@@ -723,7 +792,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Выберите игру для просмотра списка участников:", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.view_participants)
     elif message.text == "🚫 Отмена игры":
-        games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
+        games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
         if not games:
             await message.answer("Список игр пуст.")
             return
@@ -735,8 +804,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Выберите игру для отмены и уведомления игроков:", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.admin_cancel_game)
     elif message.text == "🔔 Напомнить об игре":
-        games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
-        games = filter_upcoming_games(games)
+        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
         if not games:
             await message.answer("Список игр пуст.")
             return
@@ -931,8 +999,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
 @dp.message(Form.menu)
 async def menu_handler(message: types.Message, state: FSMContext):
     if message.text == "📝Записаться на игру":
-        games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
-        games = filter_upcoming_games(games)
+        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
         if not games:
             await message.answer("К сожалению, на данный момент игр для записи нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -956,7 +1023,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             JOIN games g ON r.game_id=g.game_id
             WHERE r.user_id=%s
         """, (internal_user_id,), fetch=True)
-        games = filter_upcoming_games(games)
+        games = sort_games_by_date(filter_upcoming_games(games))
         if not games:
             await message.answer("Ты пока не записан ни на какую игру.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -972,8 +1039,10 @@ async def menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Запись на какую игру ты хочешь отменить?", reply_markup=builder.as_markup())
         await state.set_state(Form.menu)
     elif message.text == "📅Расписание игр":
-        games = execute_query("SELECT game_name, game_date FROM games WHERE is_deleted = FALSE ORDER BY game_id ASC", fetch=True)
-        games = [g for g in games if is_upcoming_game(g[1])]
+        games = sort_games_by_date(
+            [g for g in execute_query("SELECT game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True) if is_upcoming_game(g[1])],
+            date_index=1
+        )
         if not games:
             await message.answer("<b>Расписание ближайших игр:</b>\n\nИгр пока не запланировано.", parse_mode="HTML")
             return
@@ -993,8 +1062,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             parse_mode="HTML"
         )
     elif message.text == "👥Список участников":
-        games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
-        games = filter_upcoming_games(games)
+        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
         if not games:
             await message.answer("К сожалению, на данный момент игр нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -1473,7 +1541,7 @@ async def admin_reminder_handler(message: types.Message, state: FSMContext):
 @dp.message(Form.admin_reminder_audience)
 async def admin_reminder_audience_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙 Назад":
-        games = execute_query("SELECT game_id, game_name, game_date FROM games", fetch=True)
+        games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games", fetch=True))
         if not games:
             await message.answer("Список игр пуст.", reply_markup=admin_menu_keyboard())
             await state.set_state(Form.admin_menu)
@@ -1647,8 +1715,7 @@ async def admin_broadcast_handler(message: types.Message, state: FSMContext):
         return
 
     if message.text in ["✅ Только записавшимся", "❌ Только не записавшимся"]:
-        games = execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)
-        games = filter_upcoming_games(games)
+        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
         if not games:
             await message.answer("Нет доступных игр для выбора.", reply_markup=admin_menu_keyboard())
             await state.set_state(Form.admin_menu)
@@ -1810,7 +1877,96 @@ def prompt_vk_main_menu(vk_user_id: int):
     clear_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id))
 
 
-def send_vk_games_list(vk_user_id: int, games, action: str, title: str):
+def vk_number_choice_keyboard(items_count: int, back_label: str = "🔙 Назад"):
+    keyboard = VkKeyboard(one_time=True)
+    per_row = 4
+
+    for index in range(items_count):
+        if index > 0 and index % per_row == 0:
+            keyboard.add_line()
+        keyboard.add_button(str(index + 1), color=VkKeyboardColor.PRIMARY)
+
+    if back_label:
+        keyboard.add_line()
+        keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY)
+
+    return keyboard.get_keyboard()
+
+
+def vk_game_type_keyboard():
+    keyboard = VkKeyboard(one_time=True)
+    keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.PRIMARY)
+    keyboard.add_line()
+    keyboard.add_button("🌃Спортивная мафия", color=VkKeyboardColor.PRIMARY)
+    keyboard.add_line()
+    keyboard.add_button("🏆Рейтинговая игра", color=VkKeyboardColor.PRIMARY)
+    keyboard.add_line()
+    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY)
+    return keyboard.get_keyboard()
+
+
+def vk_calendar_keyboard(year: int, month: int):
+    keyboard = VkKeyboard(one_time=True)
+    days_in_month = calendar.monthrange(year, month)[1]
+
+    for day in range(1, days_in_month + 1):
+        if day > 1 and (day - 1) % 7 == 0:
+            keyboard.add_line()
+        keyboard.add_button(str(day), color=VkKeyboardColor.PRIMARY)
+
+    keyboard.add_button("◀️ Месяц", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button("▶️ Месяц", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_line()
+    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY)
+    return keyboard.get_keyboard()
+
+
+def shift_year_month(year: int, month: int, delta: int):
+    new_month = month + delta
+    new_year = year
+    if new_month < 1:
+        new_month = 12
+        new_year -= 1
+    elif new_month > 12:
+        new_month = 1
+        new_year += 1
+    return new_year, new_month
+
+
+def vk_audience_keyboard():
+    keyboard = VkKeyboard(one_time=True)
+    keyboard.add_button("👥 Всем пользователям", color=VkKeyboardColor.PRIMARY)
+    keyboard.add_line()
+    keyboard.add_button("✅ Только записавшимся", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_line()
+    keyboard.add_button("❌ Только не записавшимся", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_line()
+    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY)
+    return keyboard.get_keyboard()
+
+
+def save_platform_profile(platform: str, platform_user_id: int, first_name: str, last_name: str, mafia_nick: str, telegram_username: str = None):
+    internal_user_id = make_internal_user_id(platform, platform_user_id)
+    existing = execute_query(
+        "SELECT age, vk_username FROM users WHERE user_id = %s",
+        (internal_user_id,),
+        fetchone=True
+    )
+    age = existing[0] if existing and existing[0] is not None else 18
+    vk_username = existing[1] if existing and len(existing) > 1 else None
+    return upsert_user(
+        platform=platform,
+        platform_user_id=platform_user_id,
+        first_name=first_name,
+        last_name=last_name,
+        mafia_nick=mafia_nick,
+        age=age,
+        telegram_username=telegram_username,
+        vk_username=vk_username,
+    )
+
+
+def send_vk_games_list(vk_user_id: int, games, action: str, title: str, back_label: str = "🔙 Назад"):
     if not games:
         send_vk_message(vk_user_id, "Список игр сейчас пуст.", vk_main_menu_keyboard(make_internal_user_id(PLATFORM_VK, vk_user_id)))
         return
@@ -1819,8 +1975,8 @@ def send_vk_games_list(vk_user_id: int, games, action: str, title: str):
     for index, (_, game_name, game_date) in enumerate(games, start=1):
         lines.append(f"{index}. {game_date} {game_name}")
     lines.append("")
-    lines.append("Отправь номер игры сообщением.")
-    send_vk_message(vk_user_id, "\n".join(lines))
+    lines.append("Можно нажать кнопку с номером ниже или отправить номер сообщением.")
+    send_vk_message(vk_user_id, "\n".join(lines), vk_number_choice_keyboard(len(games), back_label=back_label))
     set_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id), action, games=games)
 
 
@@ -1877,6 +2033,33 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
     state = get_vk_state(internal_user_id)
     current = state.get("state")
 
+    if current == "vk_edit_profile_nick":
+        set_vk_state(internal_user_id, "vk_edit_profile_name", mafia_nick=text.strip())
+        send_vk_message(vk_user_id, "Отлично! Теперь напиши своё имя.")
+        return True
+
+    if current == "vk_edit_profile_name":
+        set_vk_state(
+            internal_user_id,
+            "vk_edit_profile_lastname",
+            mafia_nick=state.get("mafia_nick"),
+            first_name=text.strip(),
+        )
+        send_vk_message(vk_user_id, "И напоследок напиши свою фамилию.")
+        return True
+
+    if current == "vk_edit_profile_lastname":
+        save_platform_profile(
+            platform=PLATFORM_VK,
+            platform_user_id=vk_user_id,
+            first_name=state.get("first_name"),
+            last_name=text.strip(),
+            mafia_nick=state.get("mafia_nick"),
+        )
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, "Профиль обновлен.", vk_main_menu_keyboard(internal_user_id))
+        return True
+
     if current == "awaiting_nick":
         set_vk_state(internal_user_id, "awaiting_first_name", mafia_nick=text.strip())
         send_vk_message(vk_user_id, "Спасибо! Теперь напиши, пожалуйста, своё имя.")
@@ -1932,17 +2115,85 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
 async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str):
     state = get_vk_state(internal_user_id)
     current = state.get("state")
+    normalized_text = text.strip()
+
+    if normalized_text == "🏠 Главное меню":
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, "Возвращаюсь в админ-меню.", vk_admin_menu_keyboard())
+        return True
+
+    if normalized_text == "🔙 Назад":
+        if current == "admin_add_type":
+            selected_year = state.get("calendar_year", datetime.date.today().year)
+            selected_month = state.get("calendar_month", datetime.date.today().month)
+            set_vk_state(internal_user_id, "admin_add_date", calendar_year=selected_year, calendar_month=selected_month)
+            send_vk_message(
+                vk_user_id,
+                f"Выбери дату игры: {selected_month:02d}.{selected_year}",
+                vk_calendar_keyboard(selected_year, selected_month)
+            )
+        else:
+            clear_vk_state(internal_user_id)
+            send_vk_message(vk_user_id, "Возвращаюсь в админ-меню.", vk_admin_menu_keyboard())
+        return True
 
     if current == "admin_add_date":
-        parsed = parse_game_date(text.strip())
+        selected_year = state.get("calendar_year", datetime.date.today().year)
+        selected_month = state.get("calendar_month", datetime.date.today().month)
+
+        if normalized_text == "◀️ Месяц":
+            new_year, new_month = shift_year_month(selected_year, selected_month, -1)
+            set_vk_state(internal_user_id, "admin_add_date", calendar_year=new_year, calendar_month=new_month)
+            send_vk_message(
+                vk_user_id,
+                f"Выбери дату игры: {new_month:02d}.{new_year}",
+                vk_calendar_keyboard(new_year, new_month)
+            )
+            return True
+
+        if normalized_text == "▶️ Месяц":
+            new_year, new_month = shift_year_month(selected_year, selected_month, 1)
+            set_vk_state(internal_user_id, "admin_add_date", calendar_year=new_year, calendar_month=new_month)
+            send_vk_message(
+                vk_user_id,
+                f"Выбери дату игры: {new_month:02d}.{new_year}",
+                vk_calendar_keyboard(new_year, new_month)
+            )
+            return True
+
+        if normalized_text.isdigit():
+            day = int(normalized_text)
+            try:
+                parsed = datetime.date(selected_year, selected_month, day)
+            except ValueError:
+                send_vk_message(
+                    vk_user_id,
+                    "Такой даты нет в текущем месяце. Выбери день кнопкой ниже.",
+                    vk_calendar_keyboard(selected_year, selected_month)
+                )
+                return True
+        else:
+            parsed = parse_game_date(normalized_text)
+
         if not parsed:
-            send_vk_message(vk_user_id, "Не удалось распознать дату. Используй формат ДД.ММ или ДД.ММ.ГГГГ.")
+            send_vk_message(
+                vk_user_id,
+                "Не удалось распознать дату. Выбери день кнопкой ниже или введи дату в формате ДД.ММ.ГГГГ.",
+                vk_calendar_keyboard(selected_year, selected_month)
+            )
             return True
         formatted_date = f"{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][parsed.weekday()]} {parsed.strftime('%d.%m')}"
-        set_vk_state(internal_user_id, "admin_add_type", game_date=formatted_date)
+        set_vk_state(
+            internal_user_id,
+            "admin_add_type",
+            game_date=formatted_date,
+            calendar_year=selected_year,
+            calendar_month=selected_month
+        )
         send_vk_message(
             vk_user_id,
-            "Выбери тип игры: \n1. 🏙️Городская мафия\n2. 🌃Спортивная мафия\n3. 🏆Рейтинговая игра"
+            "Выбери тип игры кнопкой ниже.",
+            vk_game_type_keyboard()
         )
         return True
 
@@ -1957,7 +2208,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         }
         selected_type = game_types.get(text.strip().lower())
         if not selected_type:
-            send_vk_message(vk_user_id, "Отправь 1, 2 или 3.")
+            send_vk_message(vk_user_id, "Пожалуйста, выбери тип игры кнопкой ниже.", vk_game_type_keyboard())
             return True
         game_date = state.get("game_date")
         execute_query("INSERT INTO games (game_date, game_name) VALUES (%s, %s)", (game_date, selected_type))
@@ -1965,10 +2216,102 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         send_vk_message(vk_user_id, f"Игра '{game_date} {selected_type}' успешно добавлена.", vk_admin_menu_keyboard())
         return True
 
+    if current == "admin_reminder_game":
+        games = state.get("games", [])
+        if not text.strip().isdigit():
+            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
+            return True
+        index = int(text.strip()) - 1
+        if index < 0 or index >= len(games):
+            send_vk_message(vk_user_id, "Такого номера нет в списке.")
+            return True
+        game_id, game_name, game_date = games[index]
+        set_vk_state(
+            internal_user_id,
+            "admin_reminder_audience",
+            reminder_game_id=game_id,
+            reminder_game_text=f"{game_date} {game_name}"
+        )
+        send_vk_message(vk_user_id, "Кому отправить напоминание?", vk_audience_keyboard())
+        return True
+
+    if current == "admin_reminder_audience":
+        game_id = state.get("reminder_game_id")
+        if normalized_text == "👥 Всем пользователям":
+            rows = execute_query("SELECT user_id FROM users", fetch=True)
+            target_users = [r[0] for r in rows]
+        elif normalized_text == "✅ Только записавшимся":
+            rows = execute_query("SELECT user_id FROM registrations WHERE game_id = %s", (game_id,), fetch=True)
+            target_users = [r[0] for r in rows]
+        elif normalized_text == "❌ Только не записавшимся":
+            rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = %s)", (game_id,), fetch=True)
+            target_users = [r[0] for r in rows]
+        else:
+            send_vk_message(vk_user_id, "Выбери аудиторию кнопкой ниже.", vk_audience_keyboard())
+            return True
+
+        count = await send_game_reminders(target_users, game_id)
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, f"Напоминания отправлены {count} пользователям.", vk_admin_menu_keyboard())
+        return True
+
+    if current == "admin_broadcast_audience":
+        if normalized_text == "👥 Всем пользователям":
+            rows = execute_query("SELECT user_id FROM users", fetch=True)
+            target_users = [r[0] for r in rows]
+            set_vk_state(internal_user_id, "admin_broadcast_message", broadcast_target_users=target_users)
+            send_vk_message(vk_user_id, "Введи сообщение для рассылки.")
+            return True
+        if normalized_text in {"✅ Только записавшимся", "❌ Только не записавшимся"}:
+            set_vk_state(internal_user_id, "admin_broadcast_game", broadcast_filter_type=normalized_text)
+            games = fetch_upcoming_games()
+            send_vk_games_list(vk_user_id, games, "admin_broadcast_game", "Для какой игры отфильтровать аудиторию?")
+            return True
+        send_vk_message(vk_user_id, "Выбери аудиторию кнопкой ниже.", vk_audience_keyboard())
+        return True
+
+    if current == "admin_broadcast_game":
+        games = state.get("games", [])
+        if not text.strip().isdigit():
+            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
+            return True
+        index = int(text.strip()) - 1
+        if index < 0 or index >= len(games):
+            send_vk_message(vk_user_id, "Такого номера нет в списке.")
+            return True
+        game_id = games[index][0]
+        filter_type = state.get("broadcast_filter_type")
+        if filter_type == "✅ Только записавшимся":
+            rows = execute_query("SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered'", (game_id,), fetch=True)
+            target_users = [r[0] for r in rows]
+        else:
+            rows = execute_query(
+                "SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered')",
+                (game_id,),
+                fetch=True
+            )
+            target_users = [r[0] for r in rows]
+        set_vk_state(internal_user_id, "admin_broadcast_message", broadcast_target_users=target_users)
+        send_vk_message(vk_user_id, "Введи сообщение для рассылки.")
+        return True
+
+    if current == "admin_broadcast_message":
+        users = state.get("broadcast_target_users", [])
+        count = 0
+        for user_id in users:
+            try:
+                await send_text_to_user(user_id, normalized_text)
+                count += 1
+            except Exception as e:
+                logging.error(f"Error sending VK broadcast to {user_id}: {e}")
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, f"Сообщение отправлено {count} пользователям.", vk_admin_menu_keyboard())
+        return True
+
     if current in {"admin_delete_game", "admin_cancel_game", "admin_view_participants"}:
         games = state.get("games", [])
         if not text.strip().isdigit():
-            send_vk_message(vk_user_id, "Отправь номер игры из списка.")
+            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
             return True
         index = int(text.strip()) - 1
         if index < 0 or index >= len(games):
@@ -2026,9 +2369,17 @@ async def handle_vk_message(vk_user_id: int, text: str):
 
     state = get_vk_state(internal_user_id)
     current = state.get("state")
+    if normalized_text == "🔙 Назад":
+        prompt_vk_main_menu(vk_user_id)
+        return
+
+    if normalized_text == "🏠 Главное меню":
+        prompt_vk_main_menu(vk_user_id)
+        return
+
     if current == "vk_register_select":
         if not normalized_text.isdigit():
-            send_vk_message(vk_user_id, "Отправь номер игры из списка.")
+            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
             return
         games = state.get("games", [])
         index = int(normalized_text) - 1
@@ -2042,7 +2393,7 @@ async def handle_vk_message(vk_user_id: int, text: str):
 
     if current == "vk_cancel_select":
         if not normalized_text.isdigit():
-            send_vk_message(vk_user_id, "Отправь номер игры из списка.")
+            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
             return
         games = state.get("games", [])
         index = int(normalized_text) - 1
@@ -2056,7 +2407,7 @@ async def handle_vk_message(vk_user_id: int, text: str):
 
     if current == "vk_participants_select":
         if not normalized_text.isdigit():
-            send_vk_message(vk_user_id, "Отправь номер игры из списка.")
+            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
             return
         games = state.get("games", [])
         index = int(normalized_text) - 1
@@ -2087,8 +2438,13 @@ async def handle_vk_message(vk_user_id: int, text: str):
             (internal_user_id,),
             fetch=True
         )
-        games = filter_upcoming_games(games)
+        games = sort_games_by_date(filter_upcoming_games(games))
         send_vk_games_list(vk_user_id, games, "vk_cancel_select", "Выбери игру, запись на которую хочешь отменить:")
+        return
+
+    if normalized_text == "📝 Обновить профиль":
+        set_vk_state(internal_user_id, "vk_edit_profile_nick")
+        send_vk_message(vk_user_id, "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?")
         return
 
     if normalized_text == "📅Расписание игр":
@@ -2121,8 +2477,13 @@ async def handle_vk_message(vk_user_id: int, text: str):
         return
 
     if vk_user_id == VK_ADMIN_ID and normalized_text == "➕ Добавить игру":
-        set_vk_state(internal_user_id, "admin_add_date")
-        send_vk_message(vk_user_id, "Введи дату игры в формате ДД.ММ или ДД.ММ.ГГГГ.")
+        today = datetime.date.today()
+        set_vk_state(internal_user_id, "admin_add_date", calendar_year=today.year, calendar_month=today.month)
+        send_vk_message(
+            vk_user_id,
+            f"Выбери дату игры: {today.month:02d}.{today.year}",
+            vk_calendar_keyboard(today.year, today.month)
+        )
         return
 
     if vk_user_id == VK_ADMIN_ID and normalized_text == "❌ Удалить игру":
@@ -2140,6 +2501,16 @@ async def handle_vk_message(vk_user_id: int, text: str):
         send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?")
         return
 
+    if vk_user_id == VK_ADMIN_ID and normalized_text == "🔔 Напомнить об игре":
+        games = fetch_upcoming_games()
+        send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?")
+        return
+
+    if vk_user_id == VK_ADMIN_ID and normalized_text == "📢 Рассылка":
+        set_vk_state(internal_user_id, "admin_broadcast_audience")
+        send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
+        return
+
     if normalized_text == "🏠 Главное меню":
         prompt_vk_main_menu(vk_user_id)
         return
@@ -2151,6 +2522,20 @@ def vk_polling_loop(loop: asyncio.AbstractEventLoop):
     if not VK_TOKEN or not VK_GROUP_ID:
         logging.warning("VK_BOT_TOKEN или VK_GROUP_ID не заданы. VK-бот не будет запущен.")
         return
+
+    if VK_BOT_TOKEN_ENV and VK_TOKEN_ENV and VK_BOT_TOKEN_ENV != VK_TOKEN_ENV:
+        logging.warning(
+            "Одновременно заданы VK_BOT_TOKEN и VK_TOKEN с разными значениями. "
+            "Будет использован VK_BOT_TOKEN=%s, VK_TOKEN=%s",
+            mask_secret(VK_BOT_TOKEN_ENV),
+            mask_secret(VK_TOKEN_ENV),
+        )
+
+    logging.info(
+        "Запуск VK long poll с group_id=%s и токеном %s",
+        VK_GROUP_ID,
+        mask_secret(VK_TOKEN),
+    )
 
     global vk_session, vk_api_client, vk_longpoll
     try:
