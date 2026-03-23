@@ -146,6 +146,16 @@ def get_display_username(user_row) -> str:
     return "username не указан"
 
 
+def build_profile_link(platform: str, platform_user_id: int, telegram_username: str = None, vk_username: str = None) -> str:
+    if telegram_username:
+        return f"https://t.me/{telegram_username}"
+    if platform == PLATFORM_TELEGRAM:
+        return f"tg://user?id={platform_user_id}"
+    if vk_username:
+        return f"https://vk.com/{vk_username}"
+    return f"https://vk.com/id{platform_user_id}"
+
+
 def upsert_user(
     platform: str,
     platform_user_id: int,
@@ -314,6 +324,46 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
             ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
             if ud:
                 response += f"- {ud[0]} (думает)\n"
+    return response.strip()
+
+
+async def format_admin_participants_async(game_id: int, title: str) -> str:
+    participants = execute_query(
+        """
+        SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick, u.telegram_username, u.vk_username, u.platform, u.platform_user_id
+        FROM registrations r
+        JOIN users u ON r.user_id = u.user_id
+        WHERE r.game_id = %s AND r.status = %s
+        """,
+        (game_id, 'registered'),
+        fetch=True
+    )
+    thinking_users = set(await get_thinking(game_id))
+    late_users = set(await get_late_players(game_id))
+
+    if not participants and not thinking_users:
+        return f"На игру {title} пока никто не записался."
+
+    response = f"Список участников на игру {title}:\n"
+    ordered_participants = [p for p in participants if p[0] not in late_users] + [p for p in participants if p[0] in late_users]
+
+    for idx, (user_id, first_name, last_name, nick, tg_username, vk_username, platform, platform_user_id) in enumerate(ordered_participants, start=1):
+        profile_link = build_profile_link(platform, platform_user_id, tg_username, vk_username)
+        mark = " (думает)" if user_id in thinking_users else ""
+        late_mark = " (опоздает)" if user_id in late_users else ""
+        response += f"{idx}. {first_name} {last_name} ({nick}, {profile_link}){mark}{late_mark}\n"
+
+    participant_ids = {user_id for user_id, *_ in participants}
+    for uid in thinking_users:
+        if uid not in participant_ids:
+            ud = execute_query(
+                "SELECT first_name, last_name, mafia_nick, telegram_username, vk_username, platform, platform_user_id FROM users WHERE user_id=%s",
+                (uid,),
+                fetchone=True
+            )
+            if ud:
+                profile_link = build_profile_link(ud[5], ud[6], ud[3], ud[4])
+                response += f"- {ud[0]} {ud[1]} ({ud[2]}, {profile_link}) (думает)\n"
     return response.strip()
 
 # Состояния FSM
@@ -962,14 +1012,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
     ordered_participants = regular_participants + late_participants
 
     for i, (user_id, fn, ln, nick, tg_username, vk_username, platform, platform_user_id) in enumerate(ordered_participants, 1):
-        if tg_username:
-            username_text = f"@{tg_username}"
-        elif vk_username:
-            username_text = f"vk.com/{vk_username}"
-        elif platform == PLATFORM_VK:
-            username_text = f"vk id{platform_user_id}"
-        else:
-            username_text = "username не указан"
+        username_text = build_profile_link(platform, platform_user_id, tg_username, vk_username)
         mark = " (думает)" if user_id in thinking_users else ""
         late_mark = " (опоздает)" if user_id in late_users else ""
         response += f"{i}. {fn} {ln} ({nick}, {username_text}){mark}{late_mark}\n"
@@ -983,14 +1026,7 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
                 fetchone=True
             )
             if ud:
-                if ud[3]:
-                    username_text = f"@{ud[3]}"
-                elif ud[4]:
-                    username_text = f"vk.com/{ud[4]}"
-                elif ud[5] == PLATFORM_VK:
-                    username_text = f"vk id{ud[6]}"
-                else:
-                    username_text = "username не указан"
+                username_text = build_profile_link(ud[5], ud[6], ud[3], ud[4])
                 response += f"- {ud[0]} {ud[1]} ({ud[2]}, {username_text}) (думает)\n"
 
     await message.answer(response, reply_markup=admin_menu_keyboard())
@@ -1893,6 +1929,18 @@ def vk_number_choice_keyboard(items_count: int, back_label: str = "🔙 Наза
     return keyboard.get_keyboard()
 
 
+def vk_option_keyboard(labels, back_label: str = "🔙 Назад"):
+    keyboard = VkKeyboard(one_time=True)
+    for index, label in enumerate(labels):
+        if index > 0:
+            keyboard.add_line()
+        keyboard.add_button(label, color=VkKeyboardColor.PRIMARY)
+    if back_label:
+        keyboard.add_line()
+        keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY)
+    return keyboard.get_keyboard()
+
+
 def vk_game_type_keyboard():
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.PRIMARY)
@@ -1941,6 +1989,8 @@ def vk_audience_keyboard():
     keyboard.add_line()
     keyboard.add_button("❌ Только не записавшимся", color=VkKeyboardColor.SECONDARY)
     keyboard.add_line()
+    keyboard.add_button("👤 Выбрать пользователей", color=VkKeyboardColor.SECONDARY)
+    keyboard.add_line()
     keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY)
     return keyboard.get_keyboard()
 
@@ -1972,12 +2022,39 @@ def send_vk_games_list(vk_user_id: int, games, action: str, title: str, back_lab
         return
 
     lines = [title]
-    for index, (_, game_name, game_date) in enumerate(games, start=1):
-        lines.append(f"{index}. {game_date} {game_name}")
+    game_labels = []
+    for _, game_name, game_date in games:
+        label = f"{game_date} {game_name}"
+        game_labels.append(label)
+        lines.append(f"• {label}")
     lines.append("")
-    lines.append("Можно нажать кнопку с номером ниже или отправить номер сообщением.")
-    send_vk_message(vk_user_id, "\n".join(lines), vk_number_choice_keyboard(len(games), back_label=back_label))
-    set_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id), action, games=games)
+    lines.append("Выбери игру кнопкой ниже.")
+    send_vk_message(vk_user_id, "\n".join(lines), vk_option_keyboard(game_labels, back_label=back_label))
+    set_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id), action, games=games, game_labels=game_labels)
+
+
+def get_vk_selected_game(state, selected_text: str):
+    game_labels = state.get("game_labels", [])
+    games = state.get("games", [])
+    if selected_text not in game_labels:
+        return None
+    index = game_labels.index(selected_text)
+    if index >= len(games):
+        return None
+    return games[index]
+
+
+def send_vk_user_selection_list(vk_user_id: int, users, title: str):
+    if not users:
+        send_vk_message(vk_user_id, "Пользователи не найдены.", vk_admin_menu_keyboard())
+        return
+
+    lines = [title]
+    for index, (_, first_name, last_name, nick) in enumerate(users, start=1):
+        lines.append(f"{index}. {first_name} {last_name} ({nick})")
+    lines.append("")
+    lines.append("Отправь номера пользователей через запятую, например: 1,3,5")
+    send_vk_message(vk_user_id, "\n".join(lines))
 
 
 async def handle_vk_registration(internal_user_id: int, game_id: int):
@@ -2119,7 +2196,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
 
     if normalized_text == "🏠 Главное меню":
         clear_vk_state(internal_user_id)
-        send_vk_message(vk_user_id, "Возвращаюсь в админ-меню.", vk_admin_menu_keyboard())
+        send_vk_message(vk_user_id, "Возвращаюсь в главное меню.", vk_main_menu_keyboard(internal_user_id))
         return True
 
     if normalized_text == "🔙 Назад":
@@ -2132,6 +2209,21 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
                 f"Выбери дату игры: {selected_month:02d}.{selected_year}",
                 vk_calendar_keyboard(selected_year, selected_month)
             )
+        elif current == "admin_reminder_audience":
+            games = fetch_upcoming_games()
+            send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?")
+        elif current == "admin_reminder_custom_users":
+            set_vk_state(internal_user_id, "admin_reminder_audience", reminder_game_id=state.get("reminder_game_id"))
+            send_vk_message(vk_user_id, "Кому отправить напоминание?", vk_audience_keyboard())
+        elif current == "admin_broadcast_game":
+            set_vk_state(internal_user_id, "admin_broadcast_audience")
+            send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
+        elif current == "admin_broadcast_custom_users":
+            set_vk_state(internal_user_id, "admin_broadcast_audience")
+            send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
+        elif current == "admin_broadcast_message":
+            set_vk_state(internal_user_id, "admin_broadcast_audience")
+            send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
         else:
             clear_vk_state(internal_user_id)
             send_vk_message(vk_user_id, "Возвращаюсь в админ-меню.", vk_admin_menu_keyboard())
@@ -2217,15 +2309,11 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         return True
 
     if current == "admin_reminder_game":
-        games = state.get("games", [])
-        if not text.strip().isdigit():
-            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
+        selected_game = get_vk_selected_game(state, normalized_text)
+        if not selected_game:
+            send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return True
-        index = int(text.strip()) - 1
-        if index < 0 or index >= len(games):
-            send_vk_message(vk_user_id, "Такого номера нет в списке.")
-            return True
-        game_id, game_name, game_date = games[index]
+        game_id, game_name, game_date = selected_game
         set_vk_state(
             internal_user_id,
             "admin_reminder_audience",
@@ -2246,6 +2334,11 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         elif normalized_text == "❌ Только не записавшимся":
             rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = %s)", (game_id,), fetch=True)
             target_users = [r[0] for r in rows]
+        elif normalized_text == "👤 Выбрать пользователей":
+            users = execute_query("SELECT user_id, first_name, last_name, mafia_nick FROM users", fetch=True)
+            set_vk_state(internal_user_id, "admin_reminder_custom_users", reminder_game_id=game_id, selectable_users=users)
+            send_vk_user_selection_list(vk_user_id, users, "Выбери пользователей для напоминания:")
+            return True
         else:
             send_vk_message(vk_user_id, "Выбери аудиторию кнопкой ниже.", vk_audience_keyboard())
             return True
@@ -2253,6 +2346,22 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         count = await send_game_reminders(target_users, game_id)
         clear_vk_state(internal_user_id)
         send_vk_message(vk_user_id, f"Напоминания отправлены {count} пользователям.", vk_admin_menu_keyboard())
+        return True
+
+    if current == "admin_reminder_custom_users":
+        users = state.get("selectable_users", [])
+        try:
+            indexes = [int(item.strip()) - 1 for item in normalized_text.split(",") if item.strip()]
+        except ValueError:
+            send_vk_message(vk_user_id, "Не удалось распознать номера. Отправь их через запятую, например: 1,3,5")
+            return True
+        if not indexes or any(index < 0 or index >= len(users) for index in indexes):
+            send_vk_message(vk_user_id, "Проверь номера пользователей и попробуй еще раз.")
+            return True
+        target_users = [users[index][0] for index in indexes]
+        count = await send_game_reminders(target_users, state.get("reminder_game_id"))
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, f"Напоминания отправлены {count} выбранным пользователям.", vk_admin_menu_keyboard())
         return True
 
     if current == "admin_broadcast_audience":
@@ -2267,19 +2376,35 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             games = fetch_upcoming_games()
             send_vk_games_list(vk_user_id, games, "admin_broadcast_game", "Для какой игры отфильтровать аудиторию?")
             return True
+        if normalized_text == "👤 Выбрать пользователей":
+            users = execute_query("SELECT user_id, first_name, last_name, mafia_nick FROM users", fetch=True)
+            set_vk_state(internal_user_id, "admin_broadcast_custom_users", selectable_users=users)
+            send_vk_user_selection_list(vk_user_id, users, "Выбери пользователей для рассылки:")
+            return True
         send_vk_message(vk_user_id, "Выбери аудиторию кнопкой ниже.", vk_audience_keyboard())
         return True
 
+    if current == "admin_broadcast_custom_users":
+        users = state.get("selectable_users", [])
+        try:
+            indexes = [int(item.strip()) - 1 for item in normalized_text.split(",") if item.strip()]
+        except ValueError:
+            send_vk_message(vk_user_id, "Не удалось распознать номера. Отправь их через запятую, например: 1,3,5")
+            return True
+        if not indexes or any(index < 0 or index >= len(users) for index in indexes):
+            send_vk_message(vk_user_id, "Проверь номера пользователей и попробуй еще раз.")
+            return True
+        target_users = [users[index][0] for index in indexes]
+        set_vk_state(internal_user_id, "admin_broadcast_message", broadcast_target_users=target_users)
+        send_vk_message(vk_user_id, "Введи сообщение для рассылки.")
+        return True
+
     if current == "admin_broadcast_game":
-        games = state.get("games", [])
-        if not text.strip().isdigit():
-            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
+        selected_game = get_vk_selected_game(state, normalized_text)
+        if not selected_game:
+            send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return True
-        index = int(text.strip()) - 1
-        if index < 0 or index >= len(games):
-            send_vk_message(vk_user_id, "Такого номера нет в списке.")
-            return True
-        game_id = games[index][0]
+        game_id = selected_game[0]
         filter_type = state.get("broadcast_filter_type")
         if filter_type == "✅ Только записавшимся":
             rows = execute_query("SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered'", (game_id,), fetch=True)
@@ -2309,15 +2434,11 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         return True
 
     if current in {"admin_delete_game", "admin_cancel_game", "admin_view_participants"}:
-        games = state.get("games", [])
-        if not text.strip().isdigit():
-            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
+        selected_game = get_vk_selected_game(state, normalized_text)
+        if not selected_game:
+            send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return True
-        index = int(text.strip()) - 1
-        if index < 0 or index >= len(games):
-            send_vk_message(vk_user_id, "Такого номера нет в списке.")
-            return True
-        game_id, game_name, game_date = games[index]
+        game_id, game_name, game_date = selected_game
         if current == "admin_delete_game":
             execute_query("UPDATE games SET is_deleted = TRUE WHERE game_id = %s", (game_id,))
             clear_vk_state(internal_user_id)
@@ -2334,7 +2455,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             return True
         send_vk_message(
             vk_user_id,
-            await format_user_participants_async(game_id, build_game_title(game_name, game_date)),
+            await format_admin_participants_async(game_id, build_game_title(game_name, game_date)),
             vk_admin_menu_keyboard()
         )
         clear_vk_state(internal_user_id)
@@ -2364,6 +2485,9 @@ async def handle_vk_message(vk_user_id: int, text: str):
         send_vk_message(vk_user_id, "Для начала знакомства напиши, пожалуйста, свой игровой ник.")
         return
 
+    if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text):
+        return
+
     if await handle_vk_admin_flow(internal_user_id, vk_user_id, normalized_text):
         return
 
@@ -2378,43 +2502,31 @@ async def handle_vk_message(vk_user_id: int, text: str):
         return
 
     if current == "vk_register_select":
-        if not normalized_text.isdigit():
-            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
+        selected_game = get_vk_selected_game(state, normalized_text)
+        if not selected_game:
+            send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return
-        games = state.get("games", [])
-        index = int(normalized_text) - 1
-        if index < 0 or index >= len(games):
-            send_vk_message(vk_user_id, "Такого номера нет в списке.")
-            return
-        response = await handle_vk_registration(internal_user_id, games[index][0])
+        response = await handle_vk_registration(internal_user_id, selected_game[0])
         send_vk_message(vk_user_id, response, vk_main_menu_keyboard(internal_user_id))
         clear_vk_state(internal_user_id)
         return
 
     if current == "vk_cancel_select":
-        if not normalized_text.isdigit():
-            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
+        selected_game = get_vk_selected_game(state, normalized_text)
+        if not selected_game:
+            send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return
-        games = state.get("games", [])
-        index = int(normalized_text) - 1
-        if index < 0 or index >= len(games):
-            send_vk_message(vk_user_id, "Такого номера нет в списке.")
-            return
-        response = await handle_vk_cancel_registration(internal_user_id, games[index][0])
+        response = await handle_vk_cancel_registration(internal_user_id, selected_game[0])
         send_vk_message(vk_user_id, response, vk_main_menu_keyboard(internal_user_id))
         clear_vk_state(internal_user_id)
         return
 
     if current == "vk_participants_select":
-        if not normalized_text.isdigit():
-            send_vk_message(vk_user_id, "Нажми кнопку с номером игры или отправь номер сообщением.")
+        selected_game = get_vk_selected_game(state, normalized_text)
+        if not selected_game:
+            send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return
-        games = state.get("games", [])
-        index = int(normalized_text) - 1
-        if index < 0 or index >= len(games):
-            send_vk_message(vk_user_id, "Такого номера нет в списке.")
-            return
-        game_id, game_name, game_date = games[index]
+        game_id, game_name, game_date = selected_game
         send_vk_message(
             vk_user_id,
             await format_user_participants_async(game_id, build_game_title(game_name, game_date)),
