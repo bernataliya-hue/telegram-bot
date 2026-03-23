@@ -2153,25 +2153,40 @@ def vk_polling_loop(loop: asyncio.AbstractEventLoop):
         return
 
     global vk_session, vk_api_client, vk_longpoll
-    vk_session = vk_api.VkApi(token=VK_TOKEN)
-    vk_api_client = vk_session.get_api()
-    vk_longpoll = VkBotLongPoll(vk_session, int(VK_GROUP_ID))
+    try:
+        vk_session = vk_api.VkApi(token=VK_TOKEN)
+        vk_api_client = vk_session.get_api()
+        vk_longpoll = VkBotLongPoll(vk_session, int(VK_GROUP_ID))
+    except vk_api.exceptions.ApiError as exc:
+        logging.error(
+            "VK long poll не запущен: %s. Проверь, что VK_BOT_TOKEN — это токен сообщества "
+            "с правами на сообщения, а VK_GROUP_ID принадлежит этому сообществу.",
+            exc
+        )
+        return
+    except Exception as exc:
+        logging.exception("Не удалось инициализировать VK long poll: %s", exc)
+        return
+
     logging.info("VK long poll запущен")
 
-    for event in vk_longpoll.listen():
-        if event.type != VkBotEventType.MESSAGE_NEW:
-            continue
+    try:
+        for event in vk_longpoll.listen():
+            if event.type != VkBotEventType.MESSAGE_NEW:
+                continue
 
-        message = event.object.message
-        if message.get("from_id", 0) <= 0:
-            continue
+            message = event.object.message
+            if message.get("from_id", 0) <= 0:
+                continue
 
-        text = message.get("text", "")
-        future = asyncio.run_coroutine_threadsafe(handle_vk_message(message["from_id"], text), loop)
-        try:
-            future.result()
-        except Exception as exc:
-            logging.exception("Ошибка обработки VK-сообщения: %s", exc)
+            text = message.get("text", "")
+            future = asyncio.run_coroutine_threadsafe(handle_vk_message(message["from_id"], text), loop)
+            try:
+                future.result()
+            except Exception as exc:
+                logging.exception("Ошибка обработки VK-сообщения: %s", exc)
+    except Exception as exc:
+        logging.exception("VK long poll остановлен из-за ошибки: %s", exc)
 
 async def main():
     vk_thread = None
