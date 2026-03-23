@@ -4,4 +4,5 @@ psycopg2-binary==2.9.11
 pymongo>=4.4.2,<5
 dnspython
 aiogram-calendar
+vk_api>=11.9.9,<12
 
