@@ -1,14 +1,22 @@
 import os
+import time
 import psycopg2
-from psycopg2.extras import RealDictCursor
-from urllib.parse import urlparse
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_connection():
     if not DATABASE_URL:
         raise ValueError("❌ Не задан DATABASE_URL в переменных окружения")
-    return psycopg2.connect(DATABASE_URL)
+    last_error = None
+    for attempt in range(5):
+        try:
+            return psycopg2.connect(DATABASE_URL)
+        except psycopg2.OperationalError as exc:
+            last_error = exc
+            if attempt == 4:
+                raise
+            time.sleep(2)
+    raise last_error
 
 def init_db():
     conn = get_connection()
@@ -17,12 +25,25 @@ def init_db():
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id BIGINT PRIMARY KEY,
+        platform TEXT DEFAULT 'telegram',
+        platform_user_id BIGINT,
         first_name TEXT,
         last_name TEXT,
         mafia_nick TEXT,
         age INTEGER,
-        telegram_username TEXT
+        telegram_username TEXT,
+        vk_username TEXT
     )
+    """)
+
+    cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'telegram'")
+    cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_user_id BIGINT")
+    cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vk_username TEXT")
+    cursor.execute("UPDATE users SET platform = 'telegram' WHERE platform IS NULL")
+    cursor.execute("UPDATE users SET platform_user_id = user_id WHERE platform_user_id IS NULL AND platform = 'telegram'")
+    cursor.execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS users_platform_platform_user_id_idx
+    ON users (platform, platform_user_id)
     """)
 
     cursor.execute("""
