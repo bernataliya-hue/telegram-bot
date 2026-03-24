@@ -599,7 +599,7 @@ async def is_game_full(game_id: int, game_name: str, user_id: int) -> bool:
     return len(registered_ids) >= limit
 
 def get_game_rules(game_name):
-    sport_rules = "17:00 – сбор и объяснение правил\n17:30 – школа мафии\n18:00 – начало игр\n\n"
+    sport_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     city_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     rating_rules = "19:00 – начало игр\n\n"
 
@@ -623,6 +623,21 @@ def get_game_cost(game_name):
     elif "Городская мафия" in game_name:
         return city_rules
     return "\n"
+
+
+def build_registration_success_text(game_date: str, game_name: str) -> str:
+    return (
+        f"Ты успешно записался на игру {game_date} {game_name}!\n\n"
+        f"{get_game_rules(game_name)}"
+        f"{get_game_cost(game_name)}"
+        "Оплачиваете после игры\n\n"
+        "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
+        "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
+        "❗️Скидки и акции не суммируются\n\n"
+        "P.S. На улице снег, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏\n\n"
+        "❗️Игра не состоится, если придут меньше 10 человек❗️\n\n"
+        "Предупреди, если опоздаешь"
+    )
 
 
 def get_age_restriction_notice() -> str:
@@ -1348,22 +1363,10 @@ async def register_game(message: types.Message, state: FSMContext):
             ON CONFLICT (user_id, game_id)
             DO UPDATE SET status = 'registered', is_late = FALSE
         """, (internal_user_id, game_id))
-        rules = get_game_rules(game_name)
-        cost = get_game_cost(game_name)
-        await message.answer(f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
-                             f"{rules}"
-                             f"{cost}"
-                             "Оплачиваете после игры\n\n"
-                             "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
-                             "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
-                             "❗️Скидки и акции не суммируются\n\n"
-                             "P.S. На улице снег, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏\n\n"
-                             "❗️Игра не состоится, если придут меньше 10 человек❗️\n"
-                             "Поэтому, пожалуйста, не пропускай игру или отмени запись, если планы изменятся\n\n"
-                             "Предупреди, если опоздаешь", 
-                             reply_markup=late_button_keyboard(game_id),
-                             parse_mode="HTML"
-                            )
+        await message.answer(
+            build_registration_success_text(game_date, game_name),
+            reply_markup=late_button_keyboard(game_id)
+        )
         ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (internal_user_id,), fetchone=True)
         if ud:
             await notify_admin(f"Новая запись: {ud[0]} {ud[1]} ({ud[2]}) на {message.text}")
@@ -1485,21 +1488,8 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
         DO UPDATE SET status = 'registered', is_late = FALSE
     """, (user_id, game_id))
 
-    rules = get_game_rules(game_name)
-    cost = get_game_cost(game_name)
-    
     await callback.message.answer(
-        f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
-        f"{rules}"
-        f"{cost}"
-        "Оплачиваете после игры\n\n"
-        "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
-        "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
-        "❗️Скидки и акции не суммируются\n\n"
-        "P.S. На улице снег, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏\n\n"
-        "❗️Игра не состоится, если придут меньше 10 человек❗️\n\n"
-        "Предупреди, если опоздаешь",
-        parse_mode="HTML",
+        build_registration_success_text(game_date, game_name),
         reply_markup=late_button_keyboard(game_id)
     )
 
@@ -2021,6 +2011,30 @@ def vk_option_keyboard(labels, back_label: str = "🔙 Назад"):
     return keyboard.get_keyboard()
 
 
+def vk_games_keyboard(games, back_label: str = "🔙 Назад"):
+    keyboard = VkKeyboard(one_time=True)
+    for index, (game_id, game_name, game_date) in enumerate(games):
+        if index > 0:
+            keyboard.add_line()
+        keyboard.add_button(
+            f"{game_date} {game_name}",
+            color=VkKeyboardColor.PRIMARY,
+            payload={"game_id": game_id}
+        )
+    if back_label:
+        keyboard.add_line()
+        keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
+    return keyboard.get_keyboard()
+
+
+def vk_late_button_keyboard(game_id: int):
+    keyboard = VkKeyboard(one_time=True)
+    keyboard.add_button("⏰ Опоздаю", color=VkKeyboardColor.SECONDARY, payload={"command": "mark_late", "game_id": game_id})
+    keyboard.add_line()
+    keyboard.add_button("🏠 В меню", color=VkKeyboardColor.PRIMARY, payload={"command": "main_menu"})
+    return keyboard.get_keyboard()
+
+
 def vk_game_type_keyboard():
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.PRIMARY, payload={"game_type": "🏙️Городская мафия"})
@@ -2130,17 +2144,27 @@ def save_platform_profile(
     )
 
 
-def send_vk_games_list(vk_user_id: int, games, action: str, title: str, back_label: str = "🔙 Назад"):
+def send_vk_games_list(
+    vk_user_id: int,
+    games,
+    action: str,
+    title: str,
+    back_label: str = "🔙 Назад",
+    use_game_buttons: bool = False
+):
     if not games:
         send_vk_message(vk_user_id, "Список игр сейчас пуст.", vk_main_menu_keyboard(make_internal_user_id(PLATFORM_VK, vk_user_id)))
         return
 
-    lines = [title]
-    for index, (_, game_name, game_date) in enumerate(games, start=1):
-        lines.append(f"{index}. {game_date} {game_name}")
-    lines.append("")
-    lines.append("Выбери игру кнопкой ниже или отправь её номер сообщением.")
-    send_vk_message(vk_user_id, "\n".join(lines), vk_number_choice_keyboard(len(games), back_label=back_label))
+    if use_game_buttons:
+        send_vk_message(vk_user_id, title, vk_games_keyboard(games, back_label=back_label))
+    else:
+        lines = [title]
+        for index, (_, game_name, game_date) in enumerate(games, start=1):
+            lines.append(f"{index}. {game_date} {game_name}")
+        lines.append("")
+        lines.append("Выбери игру кнопкой ниже или отправь её номер сообщением.")
+        send_vk_message(vk_user_id, "\n".join(lines), vk_number_choice_keyboard(len(games), back_label=back_label))
     set_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id), action, games=games)
 
 
@@ -2148,11 +2172,23 @@ def get_vk_selected_game(state, selected_text: str, payload: dict = None):
     payload = payload or {}
     games = state.get("games", [])
 
+    game_id = payload.get("game_id")
+    if isinstance(game_id, int):
+        for game in games:
+            if int(game[0]) == game_id:
+                return game
+        return None
+
     if isinstance(payload.get("select_index"), int):
         index = payload["select_index"]
     elif selected_text.isdigit():
         index = int(selected_text) - 1
     else:
+        normalized = selected_text.strip().lower()
+        for game in games:
+            game_label = f"{game[2]} {game[1]}".strip().lower()
+            if normalized == game_label:
+                return game
         return None
 
     if index < 0 or index >= len(games):
@@ -2206,11 +2242,27 @@ async def handle_vk_registration(internal_user_id: int, game_id: int):
     if user_row:
         await notify_admin(f"Новая запись: {user_row[0]} {user_row[1]} ({user_row[2]}) на {game_date} {game_name}")
 
-    return (
-        f"Ты успешно записался на игру {game_date} {game_name}!\n\n"
-        f"{get_game_rules(game_name)}{get_game_cost(game_name)}"
-        "Если будешь опаздывать, напиши администратору."
+    return build_registration_success_text(game_date, game_name)
+
+
+async def handle_vk_mark_late(internal_user_id: int, game_id: int):
+    reg = execute_query(
+        "SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s AND status='registered'",
+        (internal_user_id, game_id),
+        fetchone=True
     )
+    if not reg:
+        return "Сначала нужно записаться на игру."
+
+    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s", (game_id,), fetchone=True)
+    if not game:
+        return "Игра не найдена."
+
+    await mark_late(internal_user_id, game_id)
+    user_row = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (internal_user_id,), fetchone=True)
+    if user_row:
+        await notify_admin(f"⏰ Опоздает: {user_row[0]} {user_row[1]} ({user_row[2]}) на {game[1]} {game[0]}")
+    return "Отметили, что ты опоздаешь ⏰"
 
 
 async def handle_vk_cancel_registration(internal_user_id: int, game_id: int):
@@ -2628,7 +2680,8 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
             send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return
         response = await handle_vk_registration(internal_user_id, selected_game[0])
-        send_vk_message(vk_user_id, response, vk_main_menu_keyboard(internal_user_id))
+        keyboard = vk_late_button_keyboard(selected_game[0]) if response.startswith("Ты успешно записался на игру") else vk_main_menu_keyboard(internal_user_id)
+        send_vk_message(vk_user_id, response, keyboard)
         clear_vk_state(internal_user_id)
         return
 
@@ -2657,7 +2710,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if normalized_text == "📝Записаться на игру" or command == "register":
-        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_register_select", "Выбери игру для записи:")
+        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_register_select", "Выбери игру для записи:", use_game_buttons=True)
         return
 
     if normalized_text == "❌Отменить запись" or command == "cancel_registration":
@@ -2672,7 +2725,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
             fetch=True
         )
         games = sort_games_by_date(filter_upcoming_games(games))
-        send_vk_games_list(vk_user_id, games, "vk_cancel_select", "Выбери игру, запись на которую хочешь отменить:")
+        send_vk_games_list(vk_user_id, games, "vk_cancel_select", "Выбери игру, запись на которую хочешь отменить:", use_game_buttons=True)
         return
 
     if normalized_text == "📝 Обновить профиль" or command == "edit_profile":
@@ -2693,7 +2746,16 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if normalized_text == "👥Список участников" or command == "participants":
-        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_participants_select", "Выбери игру, список участников которой хочешь посмотреть:")
+        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_participants_select", "Выбери игру, список участников которой хочешь посмотреть:", use_game_buttons=True)
+        return
+
+    if normalized_text == "⏰ Опоздаю" or command == "mark_late":
+        game_id = payload.get("game_id")
+        if not isinstance(game_id, int):
+            send_vk_message(vk_user_id, "Не удалось определить игру. Попробуй отметить опоздание заново.", vk_main_menu_keyboard(internal_user_id))
+            return
+        response = await handle_vk_mark_late(internal_user_id, game_id)
+        send_vk_message(vk_user_id, response, vk_main_menu_keyboard(internal_user_id))
         return
 
     if normalized_text == "📍Как до нас добраться?" or command == "location":
