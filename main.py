@@ -410,7 +410,7 @@ class Form(StatesGroup):
     admin_manual_register_first_name = State()
     admin_manual_register_last_name = State()
     admin_manual_register_nick = State()
-    admin_manual_register_profile = State()
+    admin_manual_register_action = State()
 
 # Главное меню
 def main_menu_keyboard(user_id):
@@ -596,37 +596,15 @@ def next_platform_user_id(platform: str) -> int:
     return int(row[0]) if row and row[0] is not None else 1
 
 
-def parse_manual_profile_reference(raw_value: str):
-    value = (raw_value or "").strip()
-    if not value:
-        return None
-
-    tg_by_id = re.search(r"tg://user\?id=(\d+)", value, flags=re.IGNORECASE)
-    if tg_by_id:
-        user_id = int(tg_by_id.group(1))
-        return PLATFORM_TELEGRAM, user_id, None, None
-
-    tg_by_link = re.search(r"(?:https?://)?t\.me/([A-Za-z0-9_]{3,32})", value, flags=re.IGNORECASE)
-    if tg_by_link:
-        username = tg_by_link.group(1)
-        return PLATFORM_TELEGRAM, next_platform_user_id(PLATFORM_TELEGRAM), username, None
-
-    tg_by_username = re.fullmatch(r"@?([A-Za-z0-9_]{3,32})", value)
-    if tg_by_username and not value.lower().startswith("id"):
-        username = tg_by_username.group(1)
-        return PLATFORM_TELEGRAM, next_platform_user_id(PLATFORM_TELEGRAM), username, None
-
-    vk_by_id = re.search(r"(?:https?://)?vk\.com/id(\d+)", value, flags=re.IGNORECASE)
-    if vk_by_id:
-        user_id = int(vk_by_id.group(1))
-        return PLATFORM_VK, user_id, None, None
-
-    vk_by_username = re.search(r"(?:https?://)?vk\.com/([A-Za-z0-9_.-]+)", value, flags=re.IGNORECASE)
-    if vk_by_username:
-        username = vk_by_username.group(1)
-        return PLATFORM_VK, next_platform_user_id(PLATFORM_VK), None, username
-
-    return None
+def admin_manual_action_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="✅ Записать игрока")
+    builder.button(text="❌ Отменить запись игрока")
+    builder.button(text="⏰ Отметить опоздание")
+    builder.button(text="🤔 Отметить думает")
+    builder.button(text="🔙 Назад")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
 
 def get_game_limit(game_name: str) -> int:
     if "Рейтинговая игра" in game_name:
@@ -1277,19 +1255,12 @@ async def admin_manual_register_existing_handler(message: types.Message, state: 
         await message.answer("Игрок не найден. Выберите кнопкой из списка.")
         return
 
-    game_id = data.get("manual_game_id")
-    game_title = data.get("manual_game_title")
-    execute_query(
-        """
-        INSERT INTO registrations (user_id, game_id, status)
-        VALUES (%s, %s, 'registered')
-        ON CONFLICT (user_id, game_id)
-        DO UPDATE SET status = 'registered'
-        """,
-        (selected["user_id"], game_id)
+    await state.update_data(manual_target_user_id=selected["user_id"])
+    await message.answer(
+        "Выберите действие для игрока:",
+        reply_markup=admin_manual_action_keyboard()
     )
-    await message.answer(f"Игрок добавлен в игру {game_title}.", reply_markup=admin_menu_keyboard())
-    await state.set_state(Form.admin_menu)
+    await state.set_state(Form.admin_manual_register_action)
 
 
 @dp.message(Form.admin_manual_register_first_name)
@@ -1309,19 +1280,9 @@ async def admin_manual_register_last_name_handler(message: types.Message, state:
 @dp.message(Form.admin_manual_register_nick)
 async def admin_manual_register_nick_handler(message: types.Message, state: FSMContext):
     await state.update_data(manual_nick=message.text.strip())
-    await message.answer("Вставьте ссылку на профиль игрока в Telegram или VK (например, https://t.me/username или https://vk.com/id123):")
-    await state.set_state(Form.admin_manual_register_profile)
-
-
-@dp.message(Form.admin_manual_register_profile)
-async def admin_manual_register_profile_handler(message: types.Message, state: FSMContext):
-    parsed_profile = parse_manual_profile_reference(message.text)
-    if not parsed_profile:
-        await message.answer("Не удалось распознать ссылку. Отправьте ссылку в формате Telegram или VK.")
-        return
-
-    platform, platform_user_id, telegram_username, vk_username = parsed_profile
     data = await state.get_data()
+    platform = PLATFORM_TELEGRAM
+    platform_user_id = next_platform_user_id(PLATFORM_TELEGRAM)
     upsert_user(
         platform=platform,
         platform_user_id=platform_user_id,
@@ -1329,25 +1290,101 @@ async def admin_manual_register_profile_handler(message: types.Message, state: F
         last_name=data.get("manual_last_name"),
         mafia_nick=data.get("manual_nick"),
         age=None,
-        telegram_username=telegram_username,
-        vk_username=vk_username,
+        telegram_username=None,
+        vk_username=None,
     )
     internal_user_id = make_internal_user_id(platform, platform_user_id)
-    execute_query(
-        """
-        INSERT INTO registrations (user_id, game_id, status)
-        VALUES (%s, %s, 'registered')
-        ON CONFLICT (user_id, game_id)
-        DO UPDATE SET status = 'registered'
-        """,
-        (internal_user_id, data.get("manual_game_id"))
-    )
-
+    await state.update_data(manual_target_user_id=internal_user_id)
     await message.answer(
-        f"Игрок {data.get('manual_first_name')} {data.get('manual_last_name')} ({data.get('manual_nick')}) добавлен в игру {data.get('manual_game_title')}.",
-        reply_markup=admin_menu_keyboard()
+        f"Игрок {data.get('manual_first_name')} {data.get('manual_last_name')} ({data.get('manual_nick')}) создан.\n"
+        "Выберите действие для этой игры:",
+        reply_markup=admin_manual_action_keyboard()
     )
-    await state.set_state(Form.admin_menu)
+    await state.set_state(Form.admin_manual_register_action)
+
+
+@dp.message(Form.admin_manual_register_action)
+async def admin_manual_register_action_handler(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Назад":
+        await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
+    data = await state.get_data()
+    target_user_id = data.get("manual_target_user_id")
+    game_id = data.get("manual_game_id")
+    game_title = data.get("manual_game_title")
+
+    if not target_user_id or not game_id:
+        await message.answer("Не удалось определить игрока или игру. Начните заново из админ-меню.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
+    if message.text == "✅ Записать игрока":
+        execute_query(
+            """
+            INSERT INTO registrations (user_id, game_id, status)
+            VALUES (%s, %s, 'registered')
+            ON CONFLICT (user_id, game_id)
+            DO UPDATE SET status = 'registered', is_late = FALSE
+            """,
+            (target_user_id, game_id)
+        )
+        execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (target_user_id, game_id))
+        await unmark_late(target_user_id, game_id)
+        await message.answer(f"Игрок записан на игру {game_title}.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
+    if message.text == "❌ Отменить запись игрока":
+        execute_query(
+            """
+            INSERT INTO registrations (user_id, game_id, status)
+            VALUES (%s, %s, 'declined')
+            ON CONFLICT (user_id, game_id)
+            DO UPDATE SET status = 'declined', is_late = FALSE
+            """,
+            (target_user_id, game_id)
+        )
+        execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (target_user_id, game_id))
+        await unmark_late(target_user_id, game_id)
+        await message.answer(f"Запись игрока на игру {game_title} отменена.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
+    if message.text == "⏰ Отметить опоздание":
+        execute_query(
+            """
+            INSERT INTO registrations (user_id, game_id, status)
+            VALUES (%s, %s, 'registered')
+            ON CONFLICT (user_id, game_id)
+            DO UPDATE SET status = 'registered'
+            """,
+            (target_user_id, game_id)
+        )
+        execute_query("DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s", (target_user_id, game_id))
+        await mark_late(target_user_id, game_id)
+        await message.answer(f"Для игрока отмечено опоздание на игру {game_title}.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
+    if message.text == "🤔 Отметить думает":
+        execute_query(
+            """
+            INSERT INTO registrations (user_id, game_id, status)
+            VALUES (%s, %s, 'declined')
+            ON CONFLICT (user_id, game_id)
+            DO UPDATE SET status = 'declined', is_late = FALSE
+            """,
+            (target_user_id, game_id)
+        )
+        await unmark_late(target_user_id, game_id)
+        await mark_thinking(target_user_id, game_id)
+        await message.answer(f"Для игрока отмечен статус «думает» на игру {game_title}.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
+    await message.answer("Выберите одно из действий кнопкой.", reply_markup=admin_manual_action_keyboard())
 
 @dp.message(Form.menu)
 async def menu_handler(message: types.Message, state: FSMContext):
