@@ -377,6 +377,7 @@ class Form(StatesGroup):
     edit_profile_nick = State()
     edit_profile_name = State()
     edit_profile_lastname = State()
+    edit_profile_age = State()
     menu = State()
     user_view_participants = State()
     game_registration = State()
@@ -598,7 +599,7 @@ async def is_game_full(game_id: int, game_name: str, user_id: int) -> bool:
     return len(registered_ids) >= limit
 
 def get_game_rules(game_name):
-    sport_rules = "17:00 – сбор и объяснение правил\n17:30 – школа мафии\n18:00 – начало игр\n\n"
+    sport_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     city_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     rating_rules = "19:00 – начало игр\n\n"
 
@@ -622,6 +623,48 @@ def get_game_cost(game_name):
     elif "Городская мафия" in game_name:
         return city_rules
     return "\n"
+
+
+def build_registration_success_text(game_date: str, game_name: str) -> str:
+    return (
+        f"Ты успешно записался на игру {game_date} {game_name}!\n\n"
+        f"{get_game_rules(game_name)}"
+        f"{get_game_cost(game_name)}"
+        "Оплачиваете после игры\n\n"
+        "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
+        "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
+        "❗️Скидки и акции не суммируются\n\n"
+        "P.S. На улице снег, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏\n\n"
+        "❗️Игра не состоится, если придут меньше 10 человек❗️\n\n"
+        "Предупреди, если опоздаешь"
+    )
+
+
+def get_age_restriction_notice() -> str:
+    return (
+        "В Тайной комнате действуют возрастные ограничения для игры в мафию:\n"
+        "• 18+ для Спортивной мафии\n"
+        "• 16+ для Городской мафии"
+    )
+
+
+def get_min_age_for_game(game_name: str):
+    if "Спортивная мафия" in game_name:
+        return 18
+    if "Городская мафия" in game_name:
+        return 16
+    return None
+
+
+def get_registration_age_rejection(game_name: str, user_age: int):
+    min_age = get_min_age_for_game(game_name)
+    if min_age is None:
+        return None
+    if user_age is None:
+        return "Не удалось определить твой возраст. Пожалуйста, обнови профиль и укажи корректный возраст."
+    if user_age < min_age:
+        return f"К сожалению, на игру {game_name} можно записаться только с {min_age} лет."
+    return None
 
 async def wake_up_all_users():
     users = execute_query("SELECT user_id FROM users", fetch=True)
@@ -742,11 +785,7 @@ async def process_age(message: types.Message, state: FSMContext):
     )
 
     if age < 18:
-        await message.answer(
-            "В Тайной комнате действуют возрастные ограничения для игры в мафию:\n"
-            "• 18+ для Спортивной мафии\n"
-            "• 16+ для Городской мафии"
-        )
+        await message.answer(get_age_restriction_notice())
 
     await message.answer(
         "Спасибо за знакомство!☺️\n\n"
@@ -784,15 +823,33 @@ async def edit_profile_name_handler(message: types.Message, state: FSMContext):
 
 @dp.message(Form.edit_profile_lastname)
 async def edit_profile_lastname_handler(message: types.Message, state: FSMContext):
+    await state.update_data(edit_last_name=message.text)
+    await message.answer("И последнее: сколько тебе лет?")
+    await state.set_state(Form.edit_profile_age)
+
+
+@dp.message(Form.edit_profile_age)
+async def edit_profile_age_handler(message: types.Message, state: FSMContext):
+    try:
+        age = int(message.text)
+    except (ValueError, TypeError):
+        await message.answer("Пожалуйста, введи корректный возраст цифрами.")
+        return
+
     data = await state.get_data()
     save_platform_profile(
         platform=PLATFORM_TELEGRAM,
         platform_user_id=message.from_user.id,
         first_name=data["edit_first_name"],
-        last_name=message.text,
+        last_name=data["edit_last_name"],
         mafia_nick=data["edit_mafia_nick"],
+        age=age,
         telegram_username=message.from_user.username,
     )
+
+    if age < 18:
+        await message.answer(get_age_restriction_notice())
+
     await message.answer("Профиль обновлен.", reply_markup=main_menu_keyboard(message.from_user.id))
     await state.set_state(Form.menu)
 
@@ -1281,6 +1338,14 @@ async def register_game(message: types.Message, state: FSMContext):
         )
     if result:
         game_id, game_name, game_date = result
+        user_age_row = execute_query("SELECT age FROM users WHERE user_id = %s", (internal_user_id,), fetchone=True)
+        user_age = user_age_row[0] if user_age_row else None
+        age_rejection = get_registration_age_rejection(game_name, user_age)
+        if age_rejection:
+            await message.answer(age_rejection, reply_markup=main_menu_keyboard(message.from_user.id))
+            await state.set_state(Form.menu)
+            return
+
         if await is_game_full(game_id, game_name, internal_user_id):
             await message.answer(
                 "К сожалению, на данную игру записалось максимальное количество участников😢\n"
@@ -1298,22 +1363,10 @@ async def register_game(message: types.Message, state: FSMContext):
             ON CONFLICT (user_id, game_id)
             DO UPDATE SET status = 'registered', is_late = FALSE
         """, (internal_user_id, game_id))
-        rules = get_game_rules(game_name)
-        cost = get_game_cost(game_name)
-        await message.answer(f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
-                             f"{rules}"
-                             f"{cost}"
-                             "Оплачиваете после игры\n\n"
-                             "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
-                             "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
-                             "❗️Скидки и акции не суммируются\n\n"
-                             "P.S. На улице снег, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏\n\n"
-                             "❗️Игра не состоится, если придут меньше 10 человек❗️\n"
-                             "Поэтому, пожалуйста, не пропускай игру или отмени запись, если планы изменятся\n\n"
-                             "Предупреди, если опоздаешь", 
-                             reply_markup=late_button_keyboard(game_id),
-                             parse_mode="HTML"
-                            )
+        await message.answer(
+            build_registration_success_text(game_date, game_name),
+            reply_markup=late_button_keyboard(game_id)
+        )
         ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (internal_user_id,), fetchone=True)
         if ud:
             await notify_admin(f"Новая запись: {ud[0]} {ud[1]} ({ud[2]}) на {message.text}")
@@ -1400,6 +1453,15 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
         return
 
     game_name, game_date = game
+    user_age_row = execute_query("SELECT age FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+    user_age = user_age_row[0] if user_age_row else None
+    age_rejection = get_registration_age_rejection(game_name, user_age)
+    if age_rejection:
+        await callback.message.answer(age_rejection, reply_markup=main_menu_keyboard(callback.from_user.id))
+        await callback.answer("Возрастное ограничение", show_alert=True)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await state.set_state(Form.menu)
+        return
 
     if await is_game_full(game_id, game_name, user_id):
         await callback.message.answer(
@@ -1426,21 +1488,8 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
         DO UPDATE SET status = 'registered', is_late = FALSE
     """, (user_id, game_id))
 
-    rules = get_game_rules(game_name)
-    cost = get_game_cost(game_name)
-    
     await callback.message.answer(
-        f"<b>Ты успешно записался на игру {game_date} {game_name}!</b>\n"
-        f"{rules}"
-        f"{cost}"
-        "Оплачиваете после игры\n\n"
-        "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
-        "🎁 Если вы пришли вдвоем - 1000 руб. за двоих (одним платежом)\n"
-        "❗️Скидки и акции не суммируются\n\n"
-        "P.S. На улице снег, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏\n\n"
-        "❗️Игра не состоится, если придут меньше 10 человек❗️\n\n"
-        "Предупреди, если опоздаешь",
-        parse_mode="HTML",
+        build_registration_success_text(game_date, game_name),
         reply_markup=late_button_keyboard(game_id)
     )
 
@@ -1962,6 +2011,30 @@ def vk_option_keyboard(labels, back_label: str = "🔙 Назад"):
     return keyboard.get_keyboard()
 
 
+def vk_games_keyboard(games, back_label: str = "🔙 Назад"):
+    keyboard = VkKeyboard(one_time=True)
+    for index, (game_id, game_name, game_date) in enumerate(games):
+        if index > 0:
+            keyboard.add_line()
+        keyboard.add_button(
+            f"{game_date} {game_name}",
+            color=VkKeyboardColor.PRIMARY,
+            payload={"game_id": game_id}
+        )
+    if back_label:
+        keyboard.add_line()
+        keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
+    return keyboard.get_keyboard()
+
+
+def vk_late_button_keyboard(game_id: int):
+    keyboard = VkKeyboard(one_time=True)
+    keyboard.add_button("⏰ Опоздаю", color=VkKeyboardColor.SECONDARY, payload={"command": "mark_late", "game_id": game_id})
+    keyboard.add_line()
+    keyboard.add_button("🏠 В меню", color=VkKeyboardColor.PRIMARY, payload={"command": "main_menu"})
+    return keyboard.get_keyboard()
+
+
 def vk_game_type_keyboard():
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.PRIMARY, payload={"game_type": "🏙️Городская мафия"})
@@ -2029,38 +2102,69 @@ def vk_yes_no_keyboard():
     return keyboard.get_keyboard()
 
 
-def save_platform_profile(platform: str, platform_user_id: int, first_name: str, last_name: str, mafia_nick: str, telegram_username: str = None):
+def fetch_vk_user_profile(vk_user_id: int):
+    if not vk_api_client:
+        return {}
+    try:
+        users = vk_api_client.users.get(user_ids=vk_user_id, fields="screen_name")
+        if users:
+            return users[0]
+    except Exception as e:
+        logging.warning("Не удалось получить данные профиля VK для %s: %s", vk_user_id, e)
+    return {}
+
+
+def save_platform_profile(
+    platform: str,
+    platform_user_id: int,
+    first_name: str,
+    last_name: str,
+    mafia_nick: str,
+    age: int = None,
+    telegram_username: str = None,
+):
     internal_user_id = make_internal_user_id(platform, platform_user_id)
     existing = execute_query(
         "SELECT age, vk_username FROM users WHERE user_id = %s",
         (internal_user_id,),
         fetchone=True
     )
-    age = existing[0] if existing and existing[0] is not None else 18
+    saved_age = existing[0] if existing and existing[0] is not None else 18
     vk_username = existing[1] if existing and len(existing) > 1 else None
+    resolved_age = saved_age if age is None else age
     return upsert_user(
         platform=platform,
         platform_user_id=platform_user_id,
         first_name=first_name,
         last_name=last_name,
         mafia_nick=mafia_nick,
-        age=age,
+        age=resolved_age,
         telegram_username=telegram_username,
         vk_username=vk_username,
     )
 
 
-def send_vk_games_list(vk_user_id: int, games, action: str, title: str, back_label: str = "🔙 Назад"):
+def send_vk_games_list(
+    vk_user_id: int,
+    games,
+    action: str,
+    title: str,
+    back_label: str = "🔙 Назад",
+    use_game_buttons: bool = False
+):
     if not games:
         send_vk_message(vk_user_id, "Список игр сейчас пуст.", vk_main_menu_keyboard(make_internal_user_id(PLATFORM_VK, vk_user_id)))
         return
 
-    lines = [title]
-    for index, (_, game_name, game_date) in enumerate(games, start=1):
-        lines.append(f"{index}. {game_date} {game_name}")
-    lines.append("")
-    lines.append("Выбери игру кнопкой ниже или отправь её номер сообщением.")
-    send_vk_message(vk_user_id, "\n".join(lines), vk_number_choice_keyboard(len(games), back_label=back_label))
+    if use_game_buttons:
+        send_vk_message(vk_user_id, title, vk_games_keyboard(games, back_label=back_label))
+    else:
+        lines = [title]
+        for index, (_, game_name, game_date) in enumerate(games, start=1):
+            lines.append(f"{index}. {game_date} {game_name}")
+        lines.append("")
+        lines.append("Выбери игру кнопкой ниже или отправь её номер сообщением.")
+        send_vk_message(vk_user_id, "\n".join(lines), vk_number_choice_keyboard(len(games), back_label=back_label))
     set_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id), action, games=games)
 
 
@@ -2068,11 +2172,23 @@ def get_vk_selected_game(state, selected_text: str, payload: dict = None):
     payload = payload or {}
     games = state.get("games", [])
 
+    game_id = payload.get("game_id")
+    if isinstance(game_id, int):
+        for game in games:
+            if int(game[0]) == game_id:
+                return game
+        return None
+
     if isinstance(payload.get("select_index"), int):
         index = payload["select_index"]
     elif selected_text.isdigit():
         index = int(selected_text) - 1
     else:
+        normalized = selected_text.strip().lower()
+        for game in games:
+            game_label = f"{game[2]} {game[1]}".strip().lower()
+            if normalized == game_label:
+                return game
         return None
 
     if index < 0 or index >= len(games):
@@ -2099,6 +2215,12 @@ async def handle_vk_registration(internal_user_id: int, game_id: int):
         return "Игра не найдена."
 
     game_name, game_date = game
+    user_age_row = execute_query("SELECT age FROM users WHERE user_id = %s", (internal_user_id,), fetchone=True)
+    user_age = user_age_row[0] if user_age_row else None
+    age_rejection = get_registration_age_rejection(game_name, user_age)
+    if age_rejection:
+        return age_rejection
+
     if await is_game_full(game_id, game_name, internal_user_id):
         return (
             "К сожалению, на данную игру записалось максимальное количество участников😢\n"
@@ -2120,11 +2242,27 @@ async def handle_vk_registration(internal_user_id: int, game_id: int):
     if user_row:
         await notify_admin(f"Новая запись: {user_row[0]} {user_row[1]} ({user_row[2]}) на {game_date} {game_name}")
 
-    return (
-        f"Ты успешно записался на игру {game_date} {game_name}!\n\n"
-        f"{get_game_rules(game_name)}{get_game_cost(game_name)}"
-        "Если будешь опаздывать, напиши администратору."
+    return build_registration_success_text(game_date, game_name)
+
+
+async def handle_vk_mark_late(internal_user_id: int, game_id: int):
+    reg = execute_query(
+        "SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s AND status='registered'",
+        (internal_user_id, game_id),
+        fetchone=True
     )
+    if not reg:
+        return "Сначала нужно записаться на игру."
+
+    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s", (game_id,), fetchone=True)
+    if not game:
+        return "Игра не найдена."
+
+    await mark_late(internal_user_id, game_id)
+    user_row = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (internal_user_id,), fetchone=True)
+    if user_row:
+        await notify_admin(f"⏰ Опоздает: {user_row[0]} {user_row[1]} ({user_row[2]}) на {game[1]} {game[0]}")
+    return "Отметили, что ты опоздаешь ⏰"
 
 
 async def handle_vk_cancel_registration(internal_user_id: int, game_id: int):
@@ -2147,56 +2285,43 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
     current = state.get("state")
 
     if current == "vk_edit_profile_nick":
-        set_vk_state(internal_user_id, "vk_edit_profile_name", mafia_nick=text.strip())
-        send_vk_message(vk_user_id, "Отлично! Теперь напиши своё имя.")
+        set_vk_state(internal_user_id, "vk_edit_profile_age", mafia_nick=text.strip())
+        send_vk_message(vk_user_id, "Отлично! Теперь укажи свой возраст цифрами.")
         return True
 
-    if current == "vk_edit_profile_name":
-        set_vk_state(
-            internal_user_id,
-            "vk_edit_profile_lastname",
-            mafia_nick=state.get("mafia_nick"),
-            first_name=text.strip(),
-        )
-        send_vk_message(vk_user_id, "И напоследок напиши свою фамилию.")
-        return True
+    if current == "vk_edit_profile_age":
+        try:
+            age = int(text.strip())
+        except ValueError:
+            send_vk_message(vk_user_id, "Пожалуйста, введи возраст цифрами.")
+            return True
 
-    if current == "vk_edit_profile_lastname":
-        save_platform_profile(
+        vk_profile = fetch_vk_user_profile(vk_user_id)
+        first_name = vk_profile.get("first_name") or "Имя"
+        last_name = vk_profile.get("last_name") or "Фамилия"
+        vk_username = vk_profile.get("screen_name")
+
+        upsert_user(
             platform=PLATFORM_VK,
             platform_user_id=vk_user_id,
-            first_name=state.get("first_name"),
-            last_name=text.strip(),
+            first_name=first_name,
+            last_name=last_name,
             mafia_nick=state.get("mafia_nick"),
+            age=age,
+            vk_username=vk_username,
         )
+
+        messages = []
+        if age < 18:
+            messages.append(get_age_restriction_notice())
+        messages.append("Профиль обновлен.")
         clear_vk_state(internal_user_id)
-        send_vk_message(vk_user_id, "Профиль обновлен.", vk_main_menu_keyboard(internal_user_id))
+        send_vk_message(vk_user_id, "\n\n".join(messages), vk_main_menu_keyboard(internal_user_id))
         return True
 
     if current == "awaiting_nick":
-        set_vk_state(internal_user_id, "awaiting_first_name", mafia_nick=text.strip())
-        send_vk_message(vk_user_id, "Спасибо! Теперь напиши, пожалуйста, своё имя.")
-        return True
-
-    if current == "awaiting_first_name":
-        set_vk_state(
-            internal_user_id,
-            "awaiting_last_name",
-            mafia_nick=state.get("mafia_nick"),
-            first_name=text.strip(),
-        )
-        send_vk_message(vk_user_id, "Отлично! А теперь напиши свою фамилию.")
-        return True
-
-    if current == "awaiting_last_name":
-        set_vk_state(
-            internal_user_id,
-            "awaiting_age",
-            mafia_nick=state.get("mafia_nick"),
-            first_name=state.get("first_name"),
-            last_name=text.strip(),
-        )
-        send_vk_message(vk_user_id, "И последнее: сколько тебе лет?")
+        set_vk_state(internal_user_id, "awaiting_age", mafia_nick=text.strip())
+        send_vk_message(vk_user_id, "Спасибо! И последнее: сколько тебе лет?")
         return True
 
     if current == "awaiting_age":
@@ -2206,18 +2331,28 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
             send_vk_message(vk_user_id, "Пожалуйста, введи возраст цифрами.")
             return True
 
+        vk_profile = fetch_vk_user_profile(vk_user_id)
+        first_name = vk_profile.get("first_name") or "Имя"
+        last_name = vk_profile.get("last_name") or "Фамилия"
+        vk_username = vk_profile.get("screen_name")
+
         upsert_user(
             platform=PLATFORM_VK,
             platform_user_id=vk_user_id,
-            first_name=state.get("first_name"),
-            last_name=state.get("last_name"),
+            first_name=first_name,
+            last_name=last_name,
             mafia_nick=state.get("mafia_nick"),
             age=age,
+            vk_username=vk_username,
         )
         clear_vk_state(internal_user_id)
+        message_parts = []
+        if age < 18:
+            message_parts.append(get_age_restriction_notice())
+        message_parts.append("Спасибо за знакомство! Теперь ты можешь записываться на игры и смотреть общие списки участников.")
         send_vk_message(
             vk_user_id,
-            "Спасибо за знакомство! Теперь ты можешь записываться на игры и смотреть общие списки участников.",
+            "\n\n".join(message_parts),
             vk_main_menu_keyboard(internal_user_id),
         )
         return True
@@ -2232,6 +2367,16 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
     payload = payload or {}
     command = payload.get("command")
     audience = payload.get("audience")
+
+    if command == "admin_add_game":
+        today = datetime.date.today()
+        set_vk_state(internal_user_id, "admin_add_date", calendar_year=today.year, calendar_month=today.month)
+        send_vk_message(
+            vk_user_id,
+            f"Выбери дату игры: {today.month:02d}.{today.year}",
+            vk_calendar_keyboard(today.year, today.month)
+        )
+        return True
 
     if normalized_text == "🏠 Главное меню" or command == "main_menu":
         clear_vk_state(internal_user_id)
@@ -2250,7 +2395,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             )
         elif current == "admin_reminder_audience":
             games = fetch_upcoming_games()
-            send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?")
+            send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?", use_game_buttons=True)
         elif current == "admin_reminder_custom_users":
             set_vk_state(internal_user_id, "admin_reminder_audience", reminder_game_id=state.get("reminder_game_id"))
             send_vk_message(vk_user_id, "Кому отправить напоминание?", vk_audience_keyboard())
@@ -2405,7 +2550,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
                 filter_type = "❌ Только не записавшимся"
             set_vk_state(internal_user_id, "admin_broadcast_game", broadcast_filter_type=filter_type)
             games = fetch_upcoming_games()
-            send_vk_games_list(vk_user_id, games, "admin_broadcast_game", "Для какой игры отфильтровать аудиторию?")
+            send_vk_games_list(vk_user_id, games, "admin_broadcast_game", "Для какой игры отфильтровать аудиторию?", use_game_buttons=True)
             return True
         if normalized_text == "👤 Выбрать пользователей" or audience == "custom":
             users = execute_query("SELECT user_id, first_name, last_name, mafia_nick FROM users", fetch=True)
@@ -2545,7 +2690,8 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
             send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
             return
         response = await handle_vk_registration(internal_user_id, selected_game[0])
-        send_vk_message(vk_user_id, response, vk_main_menu_keyboard(internal_user_id))
+        keyboard = vk_late_button_keyboard(selected_game[0]) if response.startswith("Ты успешно записался на игру") else vk_main_menu_keyboard(internal_user_id)
+        send_vk_message(vk_user_id, response, keyboard)
         clear_vk_state(internal_user_id)
         return
 
@@ -2574,7 +2720,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if normalized_text == "📝Записаться на игру" or command == "register":
-        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_register_select", "Выбери игру для записи:")
+        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_register_select", "Выбери игру для записи:", use_game_buttons=True)
         return
 
     if normalized_text == "❌Отменить запись" or command == "cancel_registration":
@@ -2589,7 +2735,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
             fetch=True
         )
         games = sort_games_by_date(filter_upcoming_games(games))
-        send_vk_games_list(vk_user_id, games, "vk_cancel_select", "Выбери игру, запись на которую хочешь отменить:")
+        send_vk_games_list(vk_user_id, games, "vk_cancel_select", "Выбери игру, запись на которую хочешь отменить:", use_game_buttons=True)
         return
 
     if normalized_text == "📝 Обновить профиль" or command == "edit_profile":
@@ -2610,7 +2756,16 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if normalized_text == "👥Список участников" or command == "participants":
-        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_participants_select", "Выбери игру, список участников которой хочешь посмотреть:")
+        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_participants_select", "Выбери игру, список участников которой хочешь посмотреть:", use_game_buttons=True)
+        return
+
+    if normalized_text == "⏰ Опоздаю" or command == "mark_late":
+        game_id = payload.get("game_id")
+        if not isinstance(game_id, int):
+            send_vk_message(vk_user_id, "Не удалось определить игру. Попробуй отметить опоздание заново.", vk_main_menu_keyboard(internal_user_id))
+            return
+        response = await handle_vk_mark_late(internal_user_id, game_id)
+        send_vk_message(vk_user_id, response, vk_main_menu_keyboard(internal_user_id))
         return
 
     if normalized_text == "📍Как до нас добраться?" or command == "location":
@@ -2638,28 +2793,28 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "❌ Удалить игру" or command == "admin_delete_game"):
         games = fetch_active_games()
-        send_vk_games_list(vk_user_id, games, "admin_delete_game", "Какую игру удалить?")
+        send_vk_games_list(vk_user_id, games, "admin_delete_game", "Какую игру удалить?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "♻️ Восстановить игру" or command == "admin_restore_game"):
         games = fetch_active_games(include_deleted=True)
         deleted_games = [game[:3] for game in games if len(game) > 3 and game[3]]
-        send_vk_games_list(vk_user_id, deleted_games, "admin_restore_game", "Какую игру восстановить?")
+        send_vk_games_list(vk_user_id, deleted_games, "admin_restore_game", "Какую игру восстановить?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "🚫 Отмена игры" or command == "admin_cancel_game"):
         games = fetch_active_games()
-        send_vk_games_list(vk_user_id, games, "admin_cancel_game", "Какую игру отменить?")
+        send_vk_games_list(vk_user_id, games, "admin_cancel_game", "Какую игру отменить?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "👥 Список участников" or command == "admin_view_participants"):
         games = fetch_active_games()
-        send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?")
+        send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "🔔 Напомнить об игре" or command == "admin_reminder"):
         games = fetch_upcoming_games()
-        send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?")
+        send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "📢 Рассылка" or command == "admin_broadcast"):
