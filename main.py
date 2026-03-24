@@ -39,6 +39,9 @@ VK_ADMIN_ID = int(os.environ.get("VK_ADMIN_ID") or ADMIN_ID)
 REDIS_URL = os.environ.get("REDIS_URL")
 PLATFORM_TELEGRAM = "telegram"
 PLATFORM_VK = "vk"
+VK_MAX_BUTTONS_ON_LINE = 5
+VK_MAX_LINES = 10
+VK_REMINDER_USERS_PAGE_SIZE = 8
 
 if not API_TOKEN:
     raise ValueError("❌ Не задан токен бота. Укажи TELEGRAM_BOT_TOKEN (или BOT_TOKEN / TELEGRAM_TOKEN)")
@@ -2053,20 +2056,36 @@ def vk_reminder_actions_keyboard(game_id: int, is_registered: bool):
     return keyboard.get_keyboard()
 
 
-def vk_reminder_user_selection_keyboard(users, selected_ids):
+def vk_reminder_user_selection_keyboard(users, selected_ids, page: int = 0, page_size: int = VK_REMINDER_USERS_PAGE_SIZE):
     keyboard = VkKeyboard(one_time=True)
-    for index, (uid, first_name, last_name, nick) in enumerate(users):
+    safe_page_size = max(1, min(page_size, VK_MAX_LINES - 2))
+    total_pages = max(1, (len(users) + safe_page_size - 1) // safe_page_size)
+    current_page = max(0, min(page, total_pages - 1))
+    start = current_page * safe_page_size
+    end = start + safe_page_size
+    users_on_page = users[start:end]
+
+    for index, (uid, first_name, last_name, nick) in enumerate(users_on_page):
         if index > 0:
             keyboard.add_line()
         mark = "✅ " if uid in selected_ids else ""
         keyboard.add_button(
             f"{mark}{first_name} {last_name} ({nick})",
             color=VkKeyboardColor.PRIMARY,
-            payload={"command": "rem_sel_toggle", "user_id": uid}
+            payload={"command": "rem_sel_toggle", "user_id": uid, "page": current_page}
         )
-    keyboard.add_line()
-    keyboard.add_button("✅ Готово", color=VkKeyboardColor.POSITIVE, payload={"command": "rem_sel_done"})
-    keyboard.add_line()
+
+    if total_pages > 1:
+        if users_on_page:
+            keyboard.add_line()
+        if current_page > 0:
+            keyboard.add_button("◀️", color=VkKeyboardColor.SECONDARY, payload={"command": "rem_sel_page", "page": current_page - 1})
+        if current_page < total_pages - 1:
+            keyboard.add_button("▶️", color=VkKeyboardColor.SECONDARY, payload={"command": "rem_sel_page", "page": current_page + 1})
+
+    if users_on_page or total_pages > 1:
+        keyboard.add_line()
+    keyboard.add_button("✅ Готово", color=VkKeyboardColor.POSITIVE, payload={"command": "rem_sel_done", "page": current_page})
     keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
     return keyboard.get_keyboard()
 
@@ -2088,10 +2107,11 @@ def vk_calendar_keyboard(year: int, month: int):
     days_in_month = calendar.monthrange(year, month)[1]
 
     for day in range(1, days_in_month + 1):
-        if day > 1 and (day - 1) % 7 == 0:
+        if day > 1 and (day - 1) % VK_MAX_BUTTONS_ON_LINE == 0:
             keyboard.add_line()
         keyboard.add_button(str(day), color=VkKeyboardColor.PRIMARY, payload={"calendar_day": day})
 
+    keyboard.add_line()
     keyboard.add_button("◀️ Месяц", color=VkKeyboardColor.SECONDARY, payload={"calendar_shift": -1})
     keyboard.add_button("▶️ Месяц", color=VkKeyboardColor.SECONDARY, payload={"calendar_shift": 1})
     keyboard.add_line()
@@ -2548,12 +2568,13 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
                 "admin_reminder_custom_users",
                 reminder_game_id=game_id,
                 selectable_users=users,
-                selected_user_ids=[]
+                selected_user_ids=[],
+                selected_user_page=0
             )
             send_vk_message(
                 vk_user_id,
                 "Выбери пользователей для напоминания:",
-                vk_reminder_user_selection_keyboard(users, [])
+                vk_reminder_user_selection_keyboard(users, [], page=0)
             )
             return True
         else:
@@ -2568,9 +2589,31 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
     if current == "admin_reminder_custom_users":
         users = state.get("selectable_users", [])
         selected = set(state.get("selected_user_ids", []))
+        current_page = state.get("selected_user_page", 0)
+
+        if command == "rem_sel_page":
+            requested_page = payload.get("page")
+            if not isinstance(requested_page, int):
+                send_vk_message(vk_user_id, "Не удалось переключить страницу. Попробуй ещё раз.")
+                return True
+            set_vk_state(
+                internal_user_id,
+                "admin_reminder_custom_users",
+                reminder_game_id=state.get("reminder_game_id"),
+                selectable_users=users,
+                selected_user_ids=list(selected),
+                selected_user_page=requested_page
+            )
+            send_vk_message(
+                vk_user_id,
+                "Выбери пользователей для напоминания:",
+                vk_reminder_user_selection_keyboard(users, selected, page=requested_page)
+            )
+            return True
 
         if command == "rem_sel_toggle":
             user_id = payload.get("user_id")
+            page = payload.get("page", current_page)
             if not isinstance(user_id, int):
                 send_vk_message(vk_user_id, "Не удалось определить пользователя. Попробуй ещё раз.")
                 return True
@@ -2583,17 +2626,22 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
                 "admin_reminder_custom_users",
                 reminder_game_id=state.get("reminder_game_id"),
                 selectable_users=users,
-                selected_user_ids=list(selected)
+                selected_user_ids=list(selected),
+                selected_user_page=page
             )
             send_vk_message(
                 vk_user_id,
                 "Выбери пользователей для напоминания:",
-                vk_reminder_user_selection_keyboard(users, selected)
+                vk_reminder_user_selection_keyboard(users, selected, page=page)
             )
             return True
 
         if command != "rem_sel_done":
-            send_vk_message(vk_user_id, "Выбирай пользователей кнопками ниже.", vk_reminder_user_selection_keyboard(users, selected))
+            send_vk_message(
+                vk_user_id,
+                "Выбирай пользователей кнопками ниже.",
+                vk_reminder_user_selection_keyboard(users, selected, page=current_page)
+            )
             return True
 
         if not selected:
