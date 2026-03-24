@@ -2368,6 +2368,16 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
     command = payload.get("command")
     audience = payload.get("audience")
 
+    if command == "admin_add_game":
+        today = datetime.date.today()
+        set_vk_state(internal_user_id, "admin_add_date", calendar_year=today.year, calendar_month=today.month)
+        send_vk_message(
+            vk_user_id,
+            f"Выбери дату игры: {today.month:02d}.{today.year}",
+            vk_calendar_keyboard(today.year, today.month)
+        )
+        return True
+
     if normalized_text == "🏠 Главное меню" or command == "main_menu":
         clear_vk_state(internal_user_id)
         send_vk_message(vk_user_id, "Возвращаюсь в главное меню.", vk_main_menu_keyboard(internal_user_id))
@@ -2385,7 +2395,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             )
         elif current == "admin_reminder_audience":
             games = fetch_upcoming_games()
-            send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?")
+            send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?", use_game_buttons=True)
         elif current == "admin_reminder_custom_users":
             set_vk_state(internal_user_id, "admin_reminder_audience", reminder_game_id=state.get("reminder_game_id"))
             send_vk_message(vk_user_id, "Кому отправить напоминание?", vk_audience_keyboard())
@@ -2540,7 +2550,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
                 filter_type = "❌ Только не записавшимся"
             set_vk_state(internal_user_id, "admin_broadcast_game", broadcast_filter_type=filter_type)
             games = fetch_upcoming_games()
-            send_vk_games_list(vk_user_id, games, "admin_broadcast_game", "Для какой игры отфильтровать аудиторию?")
+            send_vk_games_list(vk_user_id, games, "admin_broadcast_game", "Для какой игры отфильтровать аудиторию?", use_game_buttons=True)
             return True
         if normalized_text == "👤 Выбрать пользователей" or audience == "custom":
             users = execute_query("SELECT user_id, first_name, last_name, mafia_nick FROM users", fetch=True)
@@ -2783,28 +2793,28 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "❌ Удалить игру" or command == "admin_delete_game"):
         games = fetch_active_games()
-        send_vk_games_list(vk_user_id, games, "admin_delete_game", "Какую игру удалить?")
+        send_vk_games_list(vk_user_id, games, "admin_delete_game", "Какую игру удалить?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "♻️ Восстановить игру" or command == "admin_restore_game"):
         games = fetch_active_games(include_deleted=True)
         deleted_games = [game[:3] for game in games if len(game) > 3 and game[3]]
-        send_vk_games_list(vk_user_id, deleted_games, "admin_restore_game", "Какую игру восстановить?")
+        send_vk_games_list(vk_user_id, deleted_games, "admin_restore_game", "Какую игру восстановить?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "🚫 Отмена игры" or command == "admin_cancel_game"):
         games = fetch_active_games()
-        send_vk_games_list(vk_user_id, games, "admin_cancel_game", "Какую игру отменить?")
+        send_vk_games_list(vk_user_id, games, "admin_cancel_game", "Какую игру отменить?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "👥 Список участников" or command == "admin_view_participants"):
         games = fetch_active_games()
-        send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?")
+        send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "🔔 Напомнить об игре" or command == "admin_reminder"):
         games = fetch_upcoming_games()
-        send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?")
+        send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "📢 Рассылка" or command == "admin_broadcast"):
