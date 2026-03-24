@@ -918,7 +918,10 @@ async def admin_panel(message: types.Message, state: FSMContext):
 @dp.message(Form.admin_menu)
 async def admin_menu_handler(message: types.Message, state: FSMContext):
     if message.text == "➕ Добавить игру":
-        await message.answer("Выберите дату игры:", reply_markup=await SimpleCalendar().start_calendar())
+        await message.answer(
+            "Введите дату игры цифрами в формате ДД.ММ или ДД.ММ.ГГГГ.\n"
+            "Например: 27.03 или 27.03.2026"
+        )
         await state.set_state(Form.add_game_date)
     elif message.text == "❌ Удалить игру":
         games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
@@ -1046,6 +1049,30 @@ async def process_simple_calendar(callback_query: types.CallbackQuery, callback_
             reply_markup=builder.as_markup(resize_keyboard=True)
         )
         await state.set_state(Form.add_game_type)
+
+
+@dp.message(Form.add_game_date)
+async def process_add_game_date_text(message: types.Message, state: FSMContext):
+    parsed = parse_game_date(message.text)
+    if not parsed:
+        await message.answer("Не удалось распознать дату. Введите дату в формате ДД.ММ или ДД.ММ.ГГГГ.")
+        return
+
+    days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+    formatted_date = f"{days[parsed.weekday()]} {parsed.strftime('%d.%m')}"
+    await state.update_data(game_date=formatted_date)
+
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🏙️Городская мафия")
+    builder.button(text="🌃Спортивная мафия")
+    builder.button(text="🏆Рейтинговая игра")
+    builder.adjust(1)
+
+    await message.answer(
+        f"Дата принята: {formatted_date}\nТеперь выберите тип игры:",
+        reply_markup=builder.as_markup(resize_keyboard=True)
+    )
+    await state.set_state(Form.add_game_type)
 
 @dp.message(Form.add_game_type)
 async def process_add_game_type(message: types.Message, state: FSMContext):
@@ -2651,12 +2678,11 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
     audience = payload.get("audience")
 
     if command == "admin_add_game":
-        today = datetime.date.today()
-        set_vk_state(internal_user_id, "admin_add_date", calendar_year=today.year, calendar_month=today.month)
+        set_vk_state(internal_user_id, "admin_add_date")
         send_vk_message(
             vk_user_id,
-            f"Выбери дату игры: {today.month:02d}.{today.year}",
-            vk_calendar_keyboard(today.year, today.month)
+            "Введи дату игры цифрами в формате ДД.ММ или ДД.ММ.ГГГГ.\nНапример: 27.03 или 27.03.2026",
+            vk_back_keyboard()
         )
         return True
 
@@ -2667,13 +2693,11 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
 
     if normalized_text == "🔙 Назад" or command == "back":
         if current == "admin_add_type":
-            selected_year = state.get("calendar_year", datetime.date.today().year)
-            selected_month = state.get("calendar_month", datetime.date.today().month)
-            set_vk_state(internal_user_id, "admin_add_date", calendar_year=selected_year, calendar_month=selected_month)
+            set_vk_state(internal_user_id, "admin_add_date")
             send_vk_message(
                 vk_user_id,
-                f"Выбери дату игры: {selected_month:02d}.{selected_year}",
-                vk_calendar_keyboard(selected_year, selected_month)
+                "Введи дату игры цифрами в формате ДД.ММ или ДД.ММ.ГГГГ.",
+                vk_back_keyboard()
             )
         elif current == "admin_reminder_audience":
             games = fetch_upcoming_games()
@@ -2690,50 +2714,20 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         return True
 
     if current == "admin_add_date":
-        selected_year = state.get("calendar_year", datetime.date.today().year)
-        selected_month = state.get("calendar_month", datetime.date.today().month)
-
-        if normalized_text in {"◀️ Месяц", "▶️ Месяц"} or isinstance(payload.get("calendar_shift"), int):
-            delta = payload.get("calendar_shift")
-            if not isinstance(delta, int):
-                delta = -1 if normalized_text == "◀️ Месяц" else 1
-            new_year, new_month = shift_year_month(selected_year, selected_month, delta)
-            set_vk_state(internal_user_id, "admin_add_date", calendar_year=new_year, calendar_month=new_month)
-            send_vk_message(
-                vk_user_id,
-                f"Выбери дату игры: {new_month:02d}.{new_year}",
-                vk_calendar_keyboard(new_year, new_month)
-            )
-            return True
-
-        if isinstance(payload.get("calendar_day"), int) or normalized_text.isdigit():
-            day = payload["calendar_day"] if isinstance(payload.get("calendar_day"), int) else int(normalized_text)
-            try:
-                parsed = datetime.date(selected_year, selected_month, day)
-            except ValueError:
-                send_vk_message(
-                    vk_user_id,
-                    "Такой даты нет в текущем месяце. Выбери день кнопкой ниже.",
-                    vk_calendar_keyboard(selected_year, selected_month)
-                )
-                return True
-        else:
-            parsed = parse_game_date(normalized_text)
+        parsed = parse_game_date(normalized_text)
 
         if not parsed:
             send_vk_message(
                 vk_user_id,
-                "Не удалось распознать дату. Выбери день кнопкой ниже или введи дату в формате ДД.ММ.ГГГГ.",
-                vk_calendar_keyboard(selected_year, selected_month)
+                "Не удалось распознать дату. Введи дату цифрами в формате ДД.ММ или ДД.ММ.ГГГГ.",
+                vk_back_keyboard()
             )
             return True
         formatted_date = f"{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][parsed.weekday()]} {parsed.strftime('%d.%m')}"
         set_vk_state(
             internal_user_id,
             "admin_add_type",
-            game_date=formatted_date,
-            calendar_year=selected_year,
-            calendar_month=selected_month
+            game_date=formatted_date
         )
         send_vk_message(
             vk_user_id,
@@ -3175,12 +3169,11 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "➕ Добавить игру" or command == "admin_add_game"):
-        today = datetime.date.today()
-        set_vk_state(internal_user_id, "admin_add_date", calendar_year=today.year, calendar_month=today.month)
+        set_vk_state(internal_user_id, "admin_add_date")
         send_vk_message(
             vk_user_id,
-            f"Выбери дату игры: {today.month:02d}.{today.year}",
-            vk_calendar_keyboard(today.year, today.month)
+            "Введи дату игры цифрами в формате ДД.ММ или ДД.ММ.ГГГГ.\nНапример: 27.03 или 27.03.2026",
+            vk_back_keyboard()
         )
         return
 
