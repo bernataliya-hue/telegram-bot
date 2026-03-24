@@ -377,6 +377,7 @@ class Form(StatesGroup):
     edit_profile_nick = State()
     edit_profile_name = State()
     edit_profile_lastname = State()
+    edit_profile_age = State()
     menu = State()
     user_view_participants = State()
     game_registration = State()
@@ -623,6 +624,33 @@ def get_game_cost(game_name):
         return city_rules
     return "\n"
 
+
+def get_age_restriction_notice() -> str:
+    return (
+        "В Тайной комнате действуют возрастные ограничения для игры в мафию:\n"
+        "• 18+ для Спортивной мафии\n"
+        "• 16+ для Городской мафии"
+    )
+
+
+def get_min_age_for_game(game_name: str):
+    if "Спортивная мафия" in game_name:
+        return 18
+    if "Городская мафия" in game_name:
+        return 16
+    return None
+
+
+def get_registration_age_rejection(game_name: str, user_age: int):
+    min_age = get_min_age_for_game(game_name)
+    if min_age is None:
+        return None
+    if user_age is None:
+        return "Не удалось определить твой возраст. Пожалуйста, обнови профиль и укажи корректный возраст."
+    if user_age < min_age:
+        return f"К сожалению, на игру {game_name} можно записаться только с {min_age} лет."
+    return None
+
 async def wake_up_all_users():
     users = execute_query("SELECT user_id FROM users", fetch=True)
     if not users:
@@ -742,11 +770,7 @@ async def process_age(message: types.Message, state: FSMContext):
     )
 
     if age < 18:
-        await message.answer(
-            "В Тайной комнате действуют возрастные ограничения для игры в мафию:\n"
-            "• 18+ для Спортивной мафии\n"
-            "• 16+ для Городской мафии"
-        )
+        await message.answer(get_age_restriction_notice())
 
     await message.answer(
         "Спасибо за знакомство!☺️\n\n"
@@ -784,15 +808,33 @@ async def edit_profile_name_handler(message: types.Message, state: FSMContext):
 
 @dp.message(Form.edit_profile_lastname)
 async def edit_profile_lastname_handler(message: types.Message, state: FSMContext):
+    await state.update_data(edit_last_name=message.text)
+    await message.answer("И последнее: сколько тебе лет?")
+    await state.set_state(Form.edit_profile_age)
+
+
+@dp.message(Form.edit_profile_age)
+async def edit_profile_age_handler(message: types.Message, state: FSMContext):
+    try:
+        age = int(message.text)
+    except (ValueError, TypeError):
+        await message.answer("Пожалуйста, введи корректный возраст цифрами.")
+        return
+
     data = await state.get_data()
     save_platform_profile(
         platform=PLATFORM_TELEGRAM,
         platform_user_id=message.from_user.id,
         first_name=data["edit_first_name"],
-        last_name=message.text,
+        last_name=data["edit_last_name"],
         mafia_nick=data["edit_mafia_nick"],
+        age=age,
         telegram_username=message.from_user.username,
     )
+
+    if age < 18:
+        await message.answer(get_age_restriction_notice())
+
     await message.answer("Профиль обновлен.", reply_markup=main_menu_keyboard(message.from_user.id))
     await state.set_state(Form.menu)
 
@@ -1281,6 +1323,14 @@ async def register_game(message: types.Message, state: FSMContext):
         )
     if result:
         game_id, game_name, game_date = result
+        user_age_row = execute_query("SELECT age FROM users WHERE user_id = %s", (internal_user_id,), fetchone=True)
+        user_age = user_age_row[0] if user_age_row else None
+        age_rejection = get_registration_age_rejection(game_name, user_age)
+        if age_rejection:
+            await message.answer(age_rejection, reply_markup=main_menu_keyboard(message.from_user.id))
+            await state.set_state(Form.menu)
+            return
+
         if await is_game_full(game_id, game_name, internal_user_id):
             await message.answer(
                 "К сожалению, на данную игру записалось максимальное количество участников😢\n"
@@ -1400,6 +1450,15 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
         return
 
     game_name, game_date = game
+    user_age_row = execute_query("SELECT age FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+    user_age = user_age_row[0] if user_age_row else None
+    age_rejection = get_registration_age_rejection(game_name, user_age)
+    if age_rejection:
+        await callback.message.answer(age_rejection, reply_markup=main_menu_keyboard(callback.from_user.id))
+        await callback.answer("Возрастное ограничение", show_alert=True)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await state.set_state(Form.menu)
+        return
 
     if await is_game_full(game_id, game_name, user_id):
         await callback.message.answer(
@@ -2029,22 +2088,43 @@ def vk_yes_no_keyboard():
     return keyboard.get_keyboard()
 
 
-def save_platform_profile(platform: str, platform_user_id: int, first_name: str, last_name: str, mafia_nick: str, telegram_username: str = None):
+def fetch_vk_user_profile(vk_user_id: int):
+    if not vk_api_client:
+        return {}
+    try:
+        users = vk_api_client.users.get(user_ids=vk_user_id, fields="screen_name")
+        if users:
+            return users[0]
+    except Exception as e:
+        logging.warning("Не удалось получить данные профиля VK для %s: %s", vk_user_id, e)
+    return {}
+
+
+def save_platform_profile(
+    platform: str,
+    platform_user_id: int,
+    first_name: str,
+    last_name: str,
+    mafia_nick: str,
+    age: int = None,
+    telegram_username: str = None,
+):
     internal_user_id = make_internal_user_id(platform, platform_user_id)
     existing = execute_query(
         "SELECT age, vk_username FROM users WHERE user_id = %s",
         (internal_user_id,),
         fetchone=True
     )
-    age = existing[0] if existing and existing[0] is not None else 18
+    saved_age = existing[0] if existing and existing[0] is not None else 18
     vk_username = existing[1] if existing and len(existing) > 1 else None
+    resolved_age = saved_age if age is None else age
     return upsert_user(
         platform=platform,
         platform_user_id=platform_user_id,
         first_name=first_name,
         last_name=last_name,
         mafia_nick=mafia_nick,
-        age=age,
+        age=resolved_age,
         telegram_username=telegram_username,
         vk_username=vk_username,
     )
@@ -2099,6 +2179,12 @@ async def handle_vk_registration(internal_user_id: int, game_id: int):
         return "Игра не найдена."
 
     game_name, game_date = game
+    user_age_row = execute_query("SELECT age FROM users WHERE user_id = %s", (internal_user_id,), fetchone=True)
+    user_age = user_age_row[0] if user_age_row else None
+    age_rejection = get_registration_age_rejection(game_name, user_age)
+    if age_rejection:
+        return age_rejection
+
     if await is_game_full(game_id, game_name, internal_user_id):
         return (
             "К сожалению, на данную игру записалось максимальное количество участников😢\n"
@@ -2147,56 +2233,43 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
     current = state.get("state")
 
     if current == "vk_edit_profile_nick":
-        set_vk_state(internal_user_id, "vk_edit_profile_name", mafia_nick=text.strip())
-        send_vk_message(vk_user_id, "Отлично! Теперь напиши своё имя.")
+        set_vk_state(internal_user_id, "vk_edit_profile_age", mafia_nick=text.strip())
+        send_vk_message(vk_user_id, "Отлично! Теперь укажи свой возраст цифрами.")
         return True
 
-    if current == "vk_edit_profile_name":
-        set_vk_state(
-            internal_user_id,
-            "vk_edit_profile_lastname",
-            mafia_nick=state.get("mafia_nick"),
-            first_name=text.strip(),
-        )
-        send_vk_message(vk_user_id, "И напоследок напиши свою фамилию.")
-        return True
+    if current == "vk_edit_profile_age":
+        try:
+            age = int(text.strip())
+        except ValueError:
+            send_vk_message(vk_user_id, "Пожалуйста, введи возраст цифрами.")
+            return True
 
-    if current == "vk_edit_profile_lastname":
-        save_platform_profile(
+        vk_profile = fetch_vk_user_profile(vk_user_id)
+        first_name = vk_profile.get("first_name") or "Имя"
+        last_name = vk_profile.get("last_name") or "Фамилия"
+        vk_username = vk_profile.get("screen_name")
+
+        upsert_user(
             platform=PLATFORM_VK,
             platform_user_id=vk_user_id,
-            first_name=state.get("first_name"),
-            last_name=text.strip(),
+            first_name=first_name,
+            last_name=last_name,
             mafia_nick=state.get("mafia_nick"),
+            age=age,
+            vk_username=vk_username,
         )
+
+        messages = []
+        if age < 18:
+            messages.append(get_age_restriction_notice())
+        messages.append("Профиль обновлен.")
         clear_vk_state(internal_user_id)
-        send_vk_message(vk_user_id, "Профиль обновлен.", vk_main_menu_keyboard(internal_user_id))
+        send_vk_message(vk_user_id, "\n\n".join(messages), vk_main_menu_keyboard(internal_user_id))
         return True
 
     if current == "awaiting_nick":
-        set_vk_state(internal_user_id, "awaiting_first_name", mafia_nick=text.strip())
-        send_vk_message(vk_user_id, "Спасибо! Теперь напиши, пожалуйста, своё имя.")
-        return True
-
-    if current == "awaiting_first_name":
-        set_vk_state(
-            internal_user_id,
-            "awaiting_last_name",
-            mafia_nick=state.get("mafia_nick"),
-            first_name=text.strip(),
-        )
-        send_vk_message(vk_user_id, "Отлично! А теперь напиши свою фамилию.")
-        return True
-
-    if current == "awaiting_last_name":
-        set_vk_state(
-            internal_user_id,
-            "awaiting_age",
-            mafia_nick=state.get("mafia_nick"),
-            first_name=state.get("first_name"),
-            last_name=text.strip(),
-        )
-        send_vk_message(vk_user_id, "И последнее: сколько тебе лет?")
+        set_vk_state(internal_user_id, "awaiting_age", mafia_nick=text.strip())
+        send_vk_message(vk_user_id, "Спасибо! И последнее: сколько тебе лет?")
         return True
 
     if current == "awaiting_age":
@@ -2206,18 +2279,28 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
             send_vk_message(vk_user_id, "Пожалуйста, введи возраст цифрами.")
             return True
 
+        vk_profile = fetch_vk_user_profile(vk_user_id)
+        first_name = vk_profile.get("first_name") or "Имя"
+        last_name = vk_profile.get("last_name") or "Фамилия"
+        vk_username = vk_profile.get("screen_name")
+
         upsert_user(
             platform=PLATFORM_VK,
             platform_user_id=vk_user_id,
-            first_name=state.get("first_name"),
-            last_name=state.get("last_name"),
+            first_name=first_name,
+            last_name=last_name,
             mafia_nick=state.get("mafia_nick"),
             age=age,
+            vk_username=vk_username,
         )
         clear_vk_state(internal_user_id)
+        message_parts = []
+        if age < 18:
+            message_parts.append(get_age_restriction_notice())
+        message_parts.append("Спасибо за знакомство! Теперь ты можешь записываться на игры и смотреть общие списки участников.")
         send_vk_message(
             vk_user_id,
-            "Спасибо за знакомство! Теперь ты можешь записываться на игры и смотреть общие списки участников.",
+            "\n\n".join(message_parts),
             vk_main_menu_keyboard(internal_user_id),
         )
         return True
