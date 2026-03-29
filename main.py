@@ -411,7 +411,7 @@ def main_menu_keyboard(user_id):
     builder = ReplyKeyboardBuilder()
     builder.button(text="📝Записаться на игру")
     builder.button(text="❌Отменить запись")
-    builder.button(text="📝Обновить профиль")
+    builder.button(text="✏️Обновить профиль")
     builder.button(text="📅Расписание игр")
     builder.button(text="👥Список участников")
     builder.button(text="📍Как до нас добраться?")
@@ -440,14 +440,14 @@ def vk_main_menu_keyboard(user_id: int = None):
     keyboard.add_button("📝Записаться на игру", color=VkKeyboardColor.SECONDARY, payload={"command": "register"})
     keyboard.add_button("❌Отменить запись", color=VkKeyboardColor.SECONDARY, payload={"command": "cancel_registration"})
     keyboard.add_line()
-    keyboard.add_button("📝Обновить профиль", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_profile"})
+    keyboard.add_button("✏️Обновить профиль", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_profile"})
     keyboard.add_button("📅Расписание игр", color=VkKeyboardColor.SECONDARY, payload={"command": "schedule"})
     keyboard.add_line()
     keyboard.add_button("👥Список участников", color=VkKeyboardColor.SECONDARY, payload={"command": "participants"})
     keyboard.add_button("📍Как до нас добраться?", color=VkKeyboardColor.SECONDARY, payload={"command": "location"})
     if user_id == make_internal_user_id(PLATFORM_VK, VK_ADMIN_ID):
         keyboard.add_line()
-        keyboard.add_button("⚙️Админ-панель", color=VkKeyboardColor.POSITIVE, payload={"command": "admin_panel"})
+        keyboard.add_button("⚙️Админ-панель", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_panel"})
     return keyboard.get_keyboard()
 
 
@@ -464,7 +464,7 @@ def vk_admin_menu_keyboard():
     keyboard.add_line()
     keyboard.add_button("📢Рассылка", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_broadcast"})
     keyboard.add_line()
-    keyboard.add_button("🏠Главное меню", color=VkKeyboardColor.PRIMARY, payload={"command": "main_menu"})
+    keyboard.add_button("🏠Главное меню", color=VkKeyboardColor.SECONDARY, payload={"command": "main_menu"})
     return keyboard.get_keyboard()
 
 
@@ -750,7 +750,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message(Form.confirm_profile_update)
 async def process_confirm_profile_update(message: types.Message, state: FSMContext):
     user_text = (message.text or "").strip().lower()
-    if user_text in {"📝обновить профиль", "обновить профиль", "обновить"}:
+    if user_text in {"✏️обновить профиль", "обновить профиль", "обновить"}:
         builder = ReplyKeyboardBuilder()
         builder.button(text="🔙 Назад")
         await message.answer(
@@ -837,7 +837,7 @@ async def process_age(message: types.Message, state: FSMContext):
     await state.set_state(Form.menu)
 
 
-@dp.message(Form.menu, F.text == "📝Обновить профиль")
+@dp.message(Form.menu, F.text == "✏️Обновить профиль")
 async def edit_profile_start(message: types.Message, state: FSMContext):
     builder = ReplyKeyboardBuilder()
     builder.button(text="🔙 Назад")
@@ -2454,7 +2454,7 @@ def vk_yes_no_keyboard():
 
 def confirm_profile_update_keyboard():
     builder = ReplyKeyboardBuilder()
-    builder.button(text="📝Обновить профиль")
+    builder.button(text="✏️Обновить профиль")
     builder.button(text="✅Оставить как есть")
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
@@ -2476,7 +2476,7 @@ def vk_start_keyboard():
 
 def vk_confirm_profile_update_keyboard():
     keyboard = VkKeyboard(one_time=True)
-    keyboard.add_button("📝Обновить профиль", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_profile"})
+    keyboard.add_button("✏️Обновить профиль", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_profile"})
     keyboard.add_line()
     keyboard.add_button("✅Оставить как есть", color=VkKeyboardColor.PRIMARY, payload={"command": "keep_profile"})
     return keyboard.get_keyboard()
@@ -2682,7 +2682,7 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
         return True
 
     if current == "vk_confirm_profile_update":
-        if normalized_text in {"📝обновить профиль", "обновить профиль", "обновить"}:
+        if normalized_text in {"✏️обновить профиль", "обновить профиль", "обновить"}:
             set_vk_state(internal_user_id, "vk_edit_profile_nick")
             send_vk_message(vk_user_id, "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?", vk_back_keyboard())
             return True
@@ -3162,7 +3162,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
     if command == "keep_profile":
         normalized_text = "✅Оставить как есть"
     elif command == "edit_profile":
-        normalized_text = "📝Обновить профиль"
+        normalized_text = "✏️Обновить профиль"
     elif payload.get("answer") == "yes":
         normalized_text = "Да"
     elif payload.get("answer") == "no":
@@ -3264,7 +3264,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         send_vk_games_list(vk_user_id, games, "vk_cancel_select", "Выбери игру, запись на которую хочешь отменить:", use_game_buttons=True)
         return
 
-    if normalized_text == "📝Обновить профиль" or command == "edit_profile":
+    if normalized_text == "✏️Обновить профиль" or command == "edit_profile":
         set_vk_state(internal_user_id, "vk_edit_profile_nick")
         send_vk_message(
             vk_user_id,
