@@ -1014,12 +1014,6 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
 
-@dp.message(Form.edit_schedule)
-async def process_edit_schedule(message: types.Message, state: FSMContext):
-    execute_query("UPDATE settings SET value = %s WHERE key = 'schedule'", (message.text,))
-    await message.answer("Расписание успешно обновлено!", reply_markup=admin_menu_keyboard())
-    await state.set_state(Form.admin_menu)
-
 @dp.callback_query(SimpleCalendarCallback.filter())
 async def process_simple_calendar(callback_query: types.CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext):
     if callback_data.act == SimpleCalAct.cancel:
@@ -1447,12 +1441,12 @@ async def menu_handler(message: types.Message, state: FSMContext):
         if not games:
             await message.answer("<b>Расписание ближайших игр:</b>\n\nИгр пока не запланировано.", parse_mode="HTML")
             return
-        schedule_text = "<b>Расписание ближайших игр:</b>\n\n"
+        schedule_text = "<b>Расписание ближайших игр:</b>\n"
         for name, date in games:
             display_name = name
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
-            schedule_text += f"📆{date} {display_name}\n"
+            schedule_text += f"📆{date} {display_name}\n\n"
             schedule_text += get_game_rules(display_name)
         await message.answer(schedule_text.strip(), parse_mode="HTML")
     elif message.text == "📍Как до нас добраться?":
