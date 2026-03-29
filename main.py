@@ -1446,8 +1446,9 @@ async def menu_handler(message: types.Message, state: FSMContext):
             display_name = name
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
-            schedule_text += f"📆{date} {display_name}\n\n"
+            schedule_text += f"📆{date} {display_name}\n"
             schedule_text += get_game_rules(display_name)
+            schedule_text += f"\n"
         await message.answer(schedule_text.strip(), parse_mode="HTML")
     elif message.text == "📍Как до нас добраться?":
         await message.answer(
@@ -3280,8 +3281,9 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
             return
         lines = ["Расписание ближайших игр:\n"]
         for _, game_name, game_date in games:
-            lines.append(f"📆{game_date} {game_name}\n")
+            lines.append(f"📆{game_date} {game_name}")
             lines.append(get_game_rules(game_name).strip())
+            lines.append(f"\n")
         send_vk_message(vk_user_id, "\n".join(line for line in lines if line), vk_main_menu_keyboard(internal_user_id))
         return
 
