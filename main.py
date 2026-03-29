@@ -489,10 +489,9 @@ def vk_main_menu_keyboard(user_id: int = None):
     keyboard.add_button("❌Отменить запись", color=VkKeyboardColor.SECONDARY, payload={"command": "cancel_registration"})
     keyboard.add_line()
     keyboard.add_button("📝 Обновить профиль", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_profile"})
-    keyboard.add_line()
     keyboard.add_button("📅Расписание игр", color=VkKeyboardColor.SECONDARY, payload={"command": "schedule"})
-    keyboard.add_button("👥Список участников", color=VkKeyboardColor.SECONDARY, payload={"command": "participants"})
     keyboard.add_line()
+    keyboard.add_button("👥Список участников", color=VkKeyboardColor.SECONDARY, payload={"command": "participants"})
     keyboard.add_button("📍Как до нас добраться?", color=VkKeyboardColor.SECONDARY, payload={"command": "location"})
     if user_id == make_internal_user_id(PLATFORM_VK, VK_ADMIN_ID):
         keyboard.add_line()
