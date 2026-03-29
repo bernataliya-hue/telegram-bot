@@ -5,7 +5,6 @@ import os
 import threading
 import uuid
 import calendar
-import re
 import database
 
 from aiogram import Bot, Dispatcher, types, F
@@ -259,51 +258,6 @@ def fetch_upcoming_games():
     return sort_games_by_date(filter_upcoming_games(fetch_active_games()))
 
 
-def format_user_participants(game_id: int, title: str) -> str:
-    participants = execute_query(
-        """
-        SELECT u.user_id, u.mafia_nick
-        FROM registrations r
-        JOIN users u ON r.user_id = u.user_id
-        WHERE r.game_id = %s AND r.status = %s
-        """,
-        (game_id, 'registered'),
-        fetch=True
-    )
-    thinking_users = set()
-    late_users = set()
-    try:
-        thinking_users = set(asyncio.run(get_thinking(game_id)))
-    except RuntimeError:
-        pass
-    try:
-        late_users = set(asyncio.run(get_late_players(game_id)))
-    except RuntimeError:
-        pass
-
-    if not participants and not thinking_users:
-        return f"На игру {title} пока никто не записался."
-
-    response = f"Список участников на игру {title}:\n"
-    participant_ids = {uid for uid, _ in participants}
-    regular_participants = [p for p in participants if p[0] not in late_users]
-    late_participants = [p for p in participants if p[0] in late_users]
-
-    idx = 1
-    for uid, nick in regular_participants + late_participants:
-        mark = " (думает)" if uid in thinking_users else ""
-        late_mark = " (опоздает)" if uid in late_users else ""
-        response += f"{idx}. {nick}{mark}{late_mark}\n"
-        idx += 1
-
-    for uid in thinking_users:
-        if uid not in participant_ids:
-            ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
-            if ud:
-                response += f"- {ud[0]} (думает)\n"
-    return response.strip()
-
-
 async def format_user_participants_async(game_id: int, title: str) -> str:
     participants = execute_query(
         """
@@ -339,10 +293,6 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
             if ud:
                 response += f"- {ud[0]} (думает)\n"
     return response.strip()
-
-
-async def format_admin_participants_async(game_id: int, title: str) -> str:
-    return await format_admin_participants_with_format(game_id, title, ADMIN_PARTICIPANTS_FORMAT_FULL)
 
 
 def build_admin_participant_display(
