@@ -416,7 +416,7 @@ def main_menu_keyboard(user_id):
     builder.button(text="👥Список участников")
     builder.button(text="📍Как до нас добраться?")
     if user_id == ADMIN_ID:
-        builder.button(text="⚙️ Админ-панель")
+        builder.button(text="⚙️Админ-панель")
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
@@ -447,7 +447,7 @@ def vk_main_menu_keyboard(user_id: int = None):
     keyboard.add_button("📍Как до нас добраться?", color=VkKeyboardColor.SECONDARY, payload={"command": "location"})
     if user_id == make_internal_user_id(PLATFORM_VK, VK_ADMIN_ID):
         keyboard.add_line()
-        keyboard.add_button("⚙️ Админ-панель", color=VkKeyboardColor.POSITIVE, payload={"command": "admin_panel"})
+        keyboard.add_button("⚙️Админ-панель", color=VkKeyboardColor.POSITIVE, payload={"command": "admin_panel"})
     return keyboard.get_keyboard()
 
 
