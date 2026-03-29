@@ -750,7 +750,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message(Form.confirm_profile_update)
 async def process_confirm_profile_update(message: types.Message, state: FSMContext):
     user_text = (message.text or "").strip().lower()
-    if user_text in {"📝 обновить профиль", "обновить профиль", "обновить"}:
+    if user_text in {"📝обновить профиль", "обновить профиль", "обновить"}:
         builder = ReplyKeyboardBuilder()
         builder.button(text="🔙 Назад")
         await message.answer(
@@ -758,7 +758,7 @@ async def process_confirm_profile_update(message: types.Message, state: FSMConte
             reply_markup=builder.as_markup(resize_keyboard=True)
         )
         await state.set_state(Form.edit_profile_nick)
-    elif user_text in {"✅ оставить как есть", "оставить как есть", "оставить"}:
+    elif user_text in {"✅оставить как есть", "оставить как есть", "оставить"}:
         await message.answer("Отлично! Переходим в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
     else:
