@@ -804,8 +804,7 @@ async def process_confirm_profile_update(message: types.Message, state: FSMConte
         builder = ReplyKeyboardBuilder()
         builder.button(text="🔙 Назад")
         await message.answer(
-            "Хорошо! Давай обновим твою анкету. Какой твой игровой ник в мафии?\n\n"
-            "Если передумал, нажми «🔙 Назад».",
+            "Хорошо! Давай обновим твою анкету. Какой твой игровой ник в мафии?",
             reply_markup=builder.as_markup(resize_keyboard=True)
         )
         await state.set_state(Form.edit_profile_nick)
@@ -892,8 +891,7 @@ async def edit_profile_start(message: types.Message, state: FSMContext):
     builder = ReplyKeyboardBuilder()
     builder.button(text="🔙 Назад")
     await message.answer(
-        "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?\n\n"
-        "Если передумал, нажми «🔙 Назад».",
+        "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?",
         reply_markup=builder.as_markup(resize_keyboard=True)
     )
     await state.set_state(Form.edit_profile_nick)
@@ -2728,14 +2726,14 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
 
     if current == "vk_edit_profile_nick":
         set_vk_state(internal_user_id, "vk_edit_profile_age", mafia_nick=text.strip())
-        send_vk_message(vk_user_id, "Отлично! Теперь укажи свой возраст цифрами.")
+        send_vk_message(vk_user_id, "Отлично! Теперь укажи свой возраст цифрами.", vk_back_keyboard())
         return True
 
     if current == "vk_edit_profile_age":
         try:
             age = int(text.strip())
         except ValueError:
-            send_vk_message(vk_user_id, "Пожалуйста, введи возраст цифрами.")
+            send_vk_message(vk_user_id, "Пожалуйста, введи возраст цифрами.", vk_back_keyboard())
             return True
 
         vk_profile = fetch_vk_user_profile(vk_user_id)
@@ -3206,6 +3204,12 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
     if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text):
         return
 
+    state = get_vk_state(internal_user_id)
+    current = state.get("state")
+    if current in {"vk_register_select", "vk_cancel_select", "vk_participants_select"} and (normalized_text == "🔙 Назад" or command == "back"):
+        prompt_vk_main_menu(vk_user_id)
+        return
+
     if await handle_vk_admin_flow(internal_user_id, vk_user_id, normalized_text, payload):
         return
 
@@ -3277,8 +3281,8 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         set_vk_state(internal_user_id, "vk_edit_profile_nick")
         send_vk_message(
             vk_user_id,
-            "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?\n\nЕсли передумал, напиши «назад».",
-            vk_remove_keyboard()
+            "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?",
+            vk_back_keyboard()
         )
         return
 
