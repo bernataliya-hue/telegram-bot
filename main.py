@@ -1448,7 +1448,6 @@ async def menu_handler(message: types.Message, state: FSMContext):
                 display_name = name.replace("🏆", "🌃")
             schedule_text += f"📆{date} {display_name}\n"
             schedule_text += get_game_rules(display_name)
-            schedule_text += f"\n"
         await message.answer(schedule_text.strip(), parse_mode="HTML")
     elif message.text == "📍Как до нас добраться?":
         await message.answer(
