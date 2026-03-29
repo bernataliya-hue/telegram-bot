@@ -1962,7 +1962,7 @@ async def admin_reminder_audience_handler(message: types.Message, state: FSMCont
     elif message.text == "❌Только не записавшимся":
         rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = %s)", (game_id,), fetch=True)
         target_users = [r[0] for r in rows]
-    elif message.text in {"👤Выбрать пользователей", "👤 Выбор пользователей"}:
+    elif message.text in {"👤Выбрать пользователей", "👤Выбор пользователей"}:
         users = execute_query("SELECT user_id, first_name, last_name, mafia_nick FROM users", fetch=True)
         if not users:
             await message.answer("Пользователей не найдено.")
