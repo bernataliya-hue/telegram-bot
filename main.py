@@ -778,54 +778,55 @@ async def cmd_start(message: types.Message, state: FSMContext):
     user = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id = %s", (internal_user_id,), fetchone=True)
 
     if user:
-        builder = ReplyKeyboardBuilder()
-        builder.button(text="✅ Оставить как есть")
-        builder.button(text="📝 Обновить профиль")
-        builder.adjust(1)
-
         await message.answer(
             f"С возвращением, {user[2]}!\n"
-            "Вижу, что мы с тобой уже знакомились☺️ Хочешь изменить свое имя, фамилию или ник?",
-            reply_markup=builder.as_markup(resize_keyboard=True)
+            "Вижу, что мы с тобой уже знакомились☺️ Хочешь изменить свое имя, фамилию или ник?\n\n"
+            "Напиши текстом:\n"
+            "• «обновить профиль» — чтобы изменить данные\n"
+            "• «оставить как есть» — чтобы перейти в меню"
         )
         await state.set_state(Form.confirm_profile_update)
         return
 
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="Да")
-    builder.button(text="Нет")
     await message.answer(
         "Привет!👋\n"
         "Я бот, который поможет тебе записываться на мафию в клубе настольных игр Тайная комната.\n\n"
         "Если возникнут вопросы - пиши Нате @natabordo\n\n"
-        "Готов познакомиться?",
-        reply_markup=builder.as_markup(resize_keyboard=True)
+        "Готов познакомиться?\n"
+        "Напиши текстом «да» или «нет»."
     )
     await state.set_state(Form.start)
 
 @dp.message(Form.confirm_profile_update)
 async def process_confirm_profile_update(message: types.Message, state: FSMContext):
-    if message.text == "📝 Обновить профиль":
-        await message.answer("Хорошо! Давай обновим твою анкету. Какой твой игровой ник в мафии?")
-        await state.set_state(Form.get_nick)
-    elif message.text == "✅ Оставить как есть":
+    user_text = (message.text or "").strip().lower()
+    if user_text in {"📝 обновить профиль", "обновить профиль", "обновить"}:
+        builder = ReplyKeyboardBuilder()
+        builder.button(text="🔙 Назад")
+        await message.answer(
+            "Хорошо! Давай обновим твою анкету. Какой твой игровой ник в мафии?\n\n"
+            "Если передумал, нажми «🔙 Назад».",
+            reply_markup=builder.as_markup(resize_keyboard=True)
+        )
+        await state.set_state(Form.edit_profile_nick)
+    elif user_text in {"✅ оставить как есть", "оставить как есть", "оставить"}:
         await message.answer("Отлично! Переходим в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
     else:
-        await message.answer("Пожалуйста, воспользуйся кнопками для выбора.")
+        await message.answer("Напиши текстом «обновить профиль» или «оставить как есть».")
 
 @dp.message(Form.start)
 async def process_start(message: types.Message, state: FSMContext):
     if message.text and message.text.lower() == "да":
         await message.answer(
-        "Какой твой игровой ник в мафии?\n\n"
-        "P.S. В мафии используют ники для того, чтобы разделять игру и реальную жизнь, и не переносить негативные эмоции на личности игроков"
-    )
+            "Какой твой игровой ник в мафии?\n\n"
+            "P.S. В мафии используют ники для того, чтобы разделять игру и реальную жизнь, и не переносить негативные эмоции на личности игроков"
+        )
         await state.set_state(Form.get_nick)
     elif message.text and message.text.lower() == "нет":
         await message.answer("Хорошо, запускай бота снова, когда будешь готов.")
     else:
-        await message.answer("Пожалуйста, воспользуйся кнопками для выбора.")
+        await message.answer("Пожалуйста, напиши «да» или «нет».")
 
 @dp.message(Form.get_nick)
 async def process_name(message: types.Message, state: FSMContext):
@@ -888,12 +889,22 @@ async def process_age(message: types.Message, state: FSMContext):
 
 @dp.message(Form.menu, F.text == "📝 Обновить профиль")
 async def edit_profile_start(message: types.Message, state: FSMContext):
-    await message.answer("Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?")
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🔙 Назад")
+    await message.answer(
+        "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?\n\n"
+        "Если передумал, нажми «🔙 Назад».",
+        reply_markup=builder.as_markup(resize_keyboard=True)
+    )
     await state.set_state(Form.edit_profile_nick)
 
 
 @dp.message(Form.edit_profile_nick)
 async def edit_profile_nick_handler(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Назад":
+        await message.answer("Хорошо, возвращаю в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.set_state(Form.menu)
+        return
     await state.update_data(edit_mafia_nick=message.text)
     await message.answer("Отлично! Теперь напиши своё имя.")
     await state.set_state(Form.edit_profile_name)
@@ -901,6 +912,10 @@ async def edit_profile_nick_handler(message: types.Message, state: FSMContext):
 
 @dp.message(Form.edit_profile_name)
 async def edit_profile_name_handler(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Назад":
+        await message.answer("Хорошо, возвращаю в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.set_state(Form.menu)
+        return
     await state.update_data(edit_first_name=message.text)
     await message.answer("И напоследок напиши свою фамилию.")
     await state.set_state(Form.edit_profile_lastname)
@@ -908,6 +923,10 @@ async def edit_profile_name_handler(message: types.Message, state: FSMContext):
 
 @dp.message(Form.edit_profile_lastname)
 async def edit_profile_lastname_handler(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Назад":
+        await message.answer("Хорошо, возвращаю в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.set_state(Form.menu)
+        return
     await state.update_data(edit_last_name=message.text)
     await message.answer("И последнее: сколько тебе лет?")
     await state.set_state(Form.edit_profile_age)
@@ -915,6 +934,10 @@ async def edit_profile_lastname_handler(message: types.Message, state: FSMContex
 
 @dp.message(Form.edit_profile_age)
 async def edit_profile_age_handler(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Назад":
+        await message.answer("Хорошо, возвращаю в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
+        await state.set_state(Form.menu)
+        return
     try:
         age = int(message.text)
     except (ValueError, TypeError):
@@ -2504,6 +2527,10 @@ def vk_back_keyboard():
     return keyboard.get_keyboard()
 
 
+def vk_remove_keyboard():
+    return json.dumps({"buttons": [], "one_time": False})
+
+
 def vk_yes_no_keyboard():
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button("Да", color=VkKeyboardColor.SECONDARY, payload={"answer": "yes"})
@@ -2692,6 +2719,12 @@ async def handle_vk_cancel_registration(internal_user_id: int, game_id: int):
 def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
     state = get_vk_state(internal_user_id)
     current = state.get("state")
+    normalized_text = text.strip().lower()
+
+    if current in {"vk_edit_profile_nick", "vk_edit_profile_age"} and normalized_text in {"назад", "🔙 назад"}:
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, "Хорошо, возвращаю в главное меню.", vk_main_menu_keyboard(internal_user_id))
+        return True
 
     if current == "vk_edit_profile_nick":
         set_vk_state(internal_user_id, "vk_edit_profile_age", mafia_nick=text.strip())
@@ -2776,6 +2809,38 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
     payload = payload or {}
     command = payload.get("command")
     audience = payload.get("audience")
+    is_admin = vk_user_id == VK_ADMIN_ID
+    admin_commands = {
+        "admin_panel",
+        "admin_add_game",
+        "admin_delete_game",
+        "admin_restore_game",
+        "admin_cancel_game",
+        "admin_view_participants",
+        "admin_reminder",
+        "admin_broadcast",
+        "main_menu",
+    }
+    admin_labels = {
+        "⚙️ Админ-панель",
+        "➕ Добавить игру",
+        "❌ Удалить игру",
+        "♻️ Восстановить игру",
+        "🚫 Отмена игры",
+        "👥 Список участников",
+        "🔔 Напомнить об игре",
+        "📢 Рассылка",
+        "🏠 Главное меню",
+    }
+    has_admin_context = str(current).startswith("admin_")
+
+    if not is_admin and not has_admin_context and command not in admin_commands and normalized_text not in admin_labels:
+        return False
+
+    if not is_admin:
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, "У тебя нет доступа к админ-меню.", vk_main_menu_keyboard(internal_user_id))
+        return True
 
     if command == "admin_add_game":
         set_vk_state(internal_user_id, "admin_add_date")
@@ -3128,7 +3193,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
             clear_vk_state(internal_user_id)
         else:
             set_vk_state(internal_user_id, "awaiting_nick")
-            send_vk_message(vk_user_id, "Привет! Какой у тебя игровой ник в мафии?")
+            send_vk_message(vk_user_id, "Привет! Какой у тебя игровой ник в мафии?", vk_remove_keyboard())
         return
 
     if not user_exists:
@@ -3210,7 +3275,11 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
 
     if normalized_text == "📝 Обновить профиль" or command == "edit_profile":
         set_vk_state(internal_user_id, "vk_edit_profile_nick")
-        send_vk_message(vk_user_id, "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?", vk_back_keyboard())
+        send_vk_message(
+            vk_user_id,
+            "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?\n\nЕсли передумал, напиши «назад».",
+            vk_remove_keyboard()
+        )
         return
 
     if normalized_text == "📅Расписание игр" or command == "schedule":
