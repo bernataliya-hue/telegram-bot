@@ -2287,7 +2287,7 @@ def vk_number_choice_keyboard(items_count: int, back_label: str = "🔙 Наза
             keyboard.add_line()
         keyboard.add_button(
             str(index + 1),
-            color=VkKeyboardColor.PRIMARY,
+            color=VkKeyboardColor.SECONDARY,
             payload={"select_index": index}
         )
 
@@ -2303,7 +2303,7 @@ def vk_option_keyboard(labels, back_label: str = "🔙 Назад"):
     for index, label in enumerate(labels):
         if index > 0:
             keyboard.add_line()
-        keyboard.add_button(label, color=VkKeyboardColor.PRIMARY, payload={"select_label": label})
+        keyboard.add_button(label, color=VkKeyboardColor.SECONDARY, payload={"select_label": label})
     if back_label:
         keyboard.add_line()
         keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
@@ -2314,19 +2314,19 @@ def vk_admin_participants_format_keyboard():
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button(
         ADMIN_PARTICIPANTS_FORMAT_LABELS[ADMIN_PARTICIPANTS_FORMAT_NAME],
-        color=VkKeyboardColor.PRIMARY,
+        color=VkKeyboardColor.SECONDARY,
         payload={"participants_format": ADMIN_PARTICIPANTS_FORMAT_NAME},
     )
     keyboard.add_line()
     keyboard.add_button(
         ADMIN_PARTICIPANTS_FORMAT_LABELS[ADMIN_PARTICIPANTS_FORMAT_NAME_NICK],
-        color=VkKeyboardColor.PRIMARY,
+        color=VkKeyboardColor.SECONDARY,
         payload={"participants_format": ADMIN_PARTICIPANTS_FORMAT_NAME_NICK},
     )
     keyboard.add_line()
     keyboard.add_button(
         ADMIN_PARTICIPANTS_FORMAT_LABELS[ADMIN_PARTICIPANTS_FORMAT_FULL],
-        color=VkKeyboardColor.PRIMARY,
+        color=VkKeyboardColor.SECONDARY,
         payload={"participants_format": ADMIN_PARTICIPANTS_FORMAT_FULL},
     )
     keyboard.add_line()
@@ -2341,7 +2341,7 @@ def vk_games_keyboard(games, back_label: str = "🔙Назад"):
             keyboard.add_line()
         keyboard.add_button(
             f"{game_date} {game_name}",
-            color=VkKeyboardColor.PRIMARY,
+            color=VkKeyboardColor.SECONDARY,
             payload={"game_id": game_id}
         )
     if back_label:
@@ -2354,7 +2354,7 @@ def vk_late_button_keyboard(game_id: int):
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button("⏰Опоздаю", color=VkKeyboardColor.SECONDARY, payload={"command": "mark_late", "game_id": game_id})
     keyboard.add_line()
-    keyboard.add_button("🏠В меню", color=VkKeyboardColor.PRIMARY, payload={"command": "main_menu"})
+    keyboard.add_button("🏠В меню", color=VkKeyboardColor.SECONDARY, payload={"command": "main_menu"})
     return keyboard.get_keyboard()
 
 
@@ -2365,13 +2365,13 @@ def vk_reminder_actions_keyboard(game_id: int, is_registered: bool):
         keyboard.add_line()
         keyboard.add_button("⏰Опоздаю", color=VkKeyboardColor.SECONDARY, payload={"command": "reminder_late", "game_id": game_id})
     else:
-        keyboard.add_button("📝Записаться", color=VkKeyboardColor.PRIMARY, payload={"command": "reminder_register", "game_id": game_id})
+        keyboard.add_button("📝Записаться", color=VkKeyboardColor.SECONDARY, payload={"command": "reminder_register", "game_id": game_id})
         keyboard.add_line()
         keyboard.add_button("🤔Думаю", color=VkKeyboardColor.SECONDARY, payload={"command": "reminder_think", "game_id": game_id})
         keyboard.add_line()
-        keyboard.add_button("❌Не приду", color=VkKeyboardColor.NEGATIVE, payload={"command": "reminder_decline", "game_id": game_id})
+        keyboard.add_button("❌Не приду", color=VkKeyboardColor.SECONDARY, payload={"command": "reminder_decline", "game_id": game_id})
     keyboard.add_line()
-    keyboard.add_button("🏠В меню", color=VkKeyboardColor.PRIMARY, payload={"command": "main_menu"})
+    keyboard.add_button("🏠В меню", color=VkKeyboardColor.SECONDARY, payload={"command": "main_menu"})
     return keyboard.get_keyboard()
 
 
@@ -2390,7 +2390,7 @@ def vk_reminder_user_selection_keyboard(users, selected_ids, page: int = 0, page
         mark = "✅" if uid in selected_ids else ""
         keyboard.add_button(
             f"{mark}{first_name} {last_name} ({nick})",
-            color=VkKeyboardColor.PRIMARY,
+            color=VkKeyboardColor.SECONDARY,
             payload={"command": "rem_sel_toggle", "user_id": uid, "page": current_page}
         )
 
@@ -2404,18 +2404,18 @@ def vk_reminder_user_selection_keyboard(users, selected_ids, page: int = 0, page
 
     if users_on_page or total_pages > 1:
         keyboard.add_line()
-    keyboard.add_button("✅Готово", color=VkKeyboardColor.POSITIVE, payload={"command": "rem_sel_done", "page": current_page})
+    keyboard.add_button("✅Готово", color=VkKeyboardColor.SECONDARY, payload={"command": "rem_sel_done", "page": current_page})
     keyboard.add_button("🔙Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
     return keyboard.get_keyboard()
 
 
 def vk_game_type_keyboard():
     keyboard = VkKeyboard(one_time=True)
-    keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.PRIMARY, payload={"game_type": "🏙️Городская мафия"})
+    keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.SECONDARY, payload={"game_type": "🏙️Городская мафия"})
     keyboard.add_line()
-    keyboard.add_button("🌃Спортивная мафия", color=VkKeyboardColor.PRIMARY, payload={"game_type": "🌃Спортивная мафия"})
+    keyboard.add_button("🌃Спортивная мафия", color=VkKeyboardColor.SECONDARY, payload={"game_type": "🌃Спортивная мафия"})
     keyboard.add_line()
-    keyboard.add_button("🏆Рейтинговая игра", color=VkKeyboardColor.PRIMARY, payload={"game_type": "🏆Рейтинговая игра"})
+    keyboard.add_button("🏆Рейтинговая игра", color=VkKeyboardColor.SECONDARY, payload={"game_type": "🏆Рейтинговая игра"})
     keyboard.add_line()
     keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
     return keyboard.get_keyboard()
@@ -2423,7 +2423,7 @@ def vk_game_type_keyboard():
 
 def vk_audience_keyboard():
     keyboard = VkKeyboard(one_time=True)
-    keyboard.add_button("👥Всем пользователям", color=VkKeyboardColor.PRIMARY, payload={"audience": "all"})
+    keyboard.add_button("👥Всем пользователям", color=VkKeyboardColor.SECONDARY, payload={"audience": "all"})
     keyboard.add_line()
     keyboard.add_button("✅Только записавшимся", color=VkKeyboardColor.SECONDARY, payload={"audience": "registered"})
     keyboard.add_line()
@@ -2470,7 +2470,7 @@ def intro_yes_no_keyboard():
 
 def vk_start_keyboard():
     keyboard = VkKeyboard(one_time=True)
-    keyboard.add_button("Начать", color=VkKeyboardColor.PRIMARY, payload={"command": "start"})
+    keyboard.add_button("Начать", color=VkKeyboardColor.SECONDARY, payload={"command": "start"})
     return keyboard.get_keyboard()
 
 
@@ -2478,7 +2478,7 @@ def vk_confirm_profile_update_keyboard():
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button("✏️Обновить профиль", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_profile"})
     keyboard.add_line()
-    keyboard.add_button("✅Оставить как есть", color=VkKeyboardColor.PRIMARY, payload={"command": "keep_profile"})
+    keyboard.add_button("✅Оставить как есть", color=VkKeyboardColor.SECONDARY, payload={"command": "keep_profile"})
     return keyboard.get_keyboard()
 
 
