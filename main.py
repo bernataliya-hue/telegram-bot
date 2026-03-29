@@ -43,6 +43,14 @@ PLATFORM_VK = "vk"
 VK_MAX_BUTTONS_ON_LINE = 5
 VK_MAX_LINES = 10
 VK_REMINDER_USERS_PAGE_SIZE = 8
+ADMIN_PARTICIPANTS_FORMAT_NAME = "name_only"
+ADMIN_PARTICIPANTS_FORMAT_NAME_NICK = "name_nick"
+ADMIN_PARTICIPANTS_FORMAT_FULL = "name_nick_link"
+ADMIN_PARTICIPANTS_FORMAT_LABELS = {
+    ADMIN_PARTICIPANTS_FORMAT_NAME: "• имя фамилия",
+    ADMIN_PARTICIPANTS_FORMAT_NAME_NICK: "• имя фамилия и ник",
+    ADMIN_PARTICIPANTS_FORMAT_FULL: "• имя фамилия ник и ссылка на профиль",
+}
 
 if not API_TOKEN:
     raise ValueError("❌ Не задан токен бота. Укажи TELEGRAM_BOT_TOKEN (или BOT_TOKEN / TELEGRAM_TOKEN)")
@@ -334,6 +342,28 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
 
 
 async def format_admin_participants_async(game_id: int, title: str) -> str:
+    return await format_admin_participants_with_format(game_id, title, ADMIN_PARTICIPANTS_FORMAT_FULL)
+
+
+def build_admin_participant_display(
+    first_name: str,
+    last_name: str,
+    nick: str,
+    platform: str,
+    platform_user_id: int,
+    tg_username: str = None,
+    vk_username: str = None,
+    participants_format: str = ADMIN_PARTICIPANTS_FORMAT_FULL,
+) -> str:
+    if participants_format == ADMIN_PARTICIPANTS_FORMAT_NAME:
+        return f"{first_name} {last_name}"
+    if participants_format == ADMIN_PARTICIPANTS_FORMAT_NAME_NICK:
+        return f"{first_name} {last_name} ({nick})"
+    profile_link = build_profile_link(platform, platform_user_id, tg_username, vk_username)
+    return f"{first_name} {last_name} ({nick}, {profile_link})"
+
+
+async def format_admin_participants_with_format(game_id: int, title: str, participants_format: str) -> str:
     participants = execute_query(
         """
         SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick, u.telegram_username, u.vk_username, u.platform, u.platform_user_id
@@ -354,10 +384,19 @@ async def format_admin_participants_async(game_id: int, title: str) -> str:
     ordered_participants = [p for p in participants if p[0] not in late_users] + [p for p in participants if p[0] in late_users]
 
     for idx, (user_id, first_name, last_name, nick, tg_username, vk_username, platform, platform_user_id) in enumerate(ordered_participants, start=1):
-        profile_link = build_profile_link(platform, platform_user_id, tg_username, vk_username)
         mark = " (думает)" if user_id in thinking_users else ""
         late_mark = " (опоздает)" if user_id in late_users else ""
-        response += f"{idx}. {first_name} {last_name} ({nick}, {profile_link}){mark}{late_mark}\n"
+        participant_view = build_admin_participant_display(
+            first_name,
+            last_name,
+            nick,
+            platform,
+            platform_user_id,
+            tg_username,
+            vk_username,
+            participants_format,
+        )
+        response += f"{idx}. {participant_view}{mark}{late_mark}\n"
 
     participant_ids = {user_id for user_id, *_ in participants}
     for uid in thinking_users:
@@ -368,8 +407,10 @@ async def format_admin_participants_async(game_id: int, title: str) -> str:
                 fetchone=True
             )
             if ud:
-                profile_link = build_profile_link(ud[5], ud[6], ud[3], ud[4])
-                response += f"- {ud[0]} {ud[1]} ({ud[2]}, {profile_link}) (думает)\n"
+                participant_view = build_admin_participant_display(
+                    ud[0], ud[1], ud[2], ud[5], ud[6], ud[3], ud[4], participants_format
+                )
+                response += f"- {participant_view} (думает)\n"
     return response.strip()
 
 # Состояния FSM
@@ -392,6 +433,7 @@ class Form(StatesGroup):
     add_game_type = State()
     delete_game = State()
     view_participants = State()
+    view_participants_format = State()
     admin_cancel_game = State()
     edit_schedule = State()
     confirm_profile_update = State()
@@ -443,7 +485,7 @@ def admin_menu_keyboard():
 
 def vk_main_menu_keyboard(user_id: int = None):
     keyboard = VkKeyboard(one_time=False)
-    keyboard.add_button("📝Записаться на игру", color=VkKeyboardColor.PRIMARY, payload={"command": "register"})
+    keyboard.add_button("📝Записаться на игру", color=VkKeyboardColor.SECONDARY, payload={"command": "register"})
     keyboard.add_button("❌Отменить запись", color=VkKeyboardColor.SECONDARY, payload={"command": "cancel_registration"})
     keyboard.add_line()
     keyboard.add_button("📝 Обновить профиль", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_profile"})
@@ -460,7 +502,7 @@ def vk_main_menu_keyboard(user_id: int = None):
 
 def vk_admin_menu_keyboard():
     keyboard = VkKeyboard(one_time=False)
-    keyboard.add_button("➕ Добавить игру", color=VkKeyboardColor.POSITIVE, payload={"command": "admin_add_game"})
+    keyboard.add_button("➕ Добавить игру", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_add_game"})
     keyboard.add_button("❌ Удалить игру", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_delete_game"})
     keyboard.add_line()
     keyboard.add_button("♻️ Восстановить игру", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_restore_game"})
@@ -473,6 +515,16 @@ def vk_admin_menu_keyboard():
     keyboard.add_line()
     keyboard.add_button("🏠 Главное меню", color=VkKeyboardColor.PRIMARY, payload={"command": "main_menu"})
     return keyboard.get_keyboard()
+
+
+def admin_participants_format_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text=ADMIN_PARTICIPANTS_FORMAT_LABELS[ADMIN_PARTICIPANTS_FORMAT_NAME])
+    builder.button(text=ADMIN_PARTICIPANTS_FORMAT_LABELS[ADMIN_PARTICIPANTS_FORMAT_NAME_NICK])
+    builder.button(text=ADMIN_PARTICIPANTS_FORMAT_LABELS[ADMIN_PARTICIPANTS_FORMAT_FULL])
+    builder.button(text="🔙 Назад")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
 
 # Helper для "думающих" (теперь в БД)
 async def mark_thinking(user_id: int, game_id: int):
@@ -1117,53 +1169,40 @@ async def admin_view_participants_handler(message: types.Message, state: FSMCont
         await state.set_state(Form.admin_menu)
         return
 
-    game_id = result[0]
+    await state.update_data(admin_participants_game_id=result[0], admin_participants_game_title=clean_text)
+    await message.answer(
+        "Выберите формат списка участников:",
+        reply_markup=admin_participants_format_keyboard()
+    )
+    await state.set_state(Form.view_participants_format)
 
-    # Получаем зарегистрированных участников
-    participants = execute_query("""
-        SELECT u.user_id, u.first_name, u.last_name, u.mafia_nick, u.telegram_username, u.vk_username, u.platform, u.platform_user_id
-        FROM registrations r
-        JOIN users u ON r.user_id = u.user_id
-        WHERE r.game_id = %s
-            AND r.status = %s
-    """, (game_id,'registered'), fetch=True)
 
-    # Получаем думающих через Redis
-    thinking_users = await get_thinking(game_id)
-    thinking_users = set(map(int, thinking_users))  # строки в int
-    late_users = await get_late_players(game_id)
-
-    if not participants and not thinking_users:
-        await message.answer(f"На игру '{message.text}' пока никто не записался.", reply_markup=admin_menu_keyboard())
+@dp.message(Form.view_participants_format)
+async def admin_view_participants_format_handler(message: types.Message, state: FSMContext):
+    if message.text == "🔙 Назад":
+        await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
         return
 
-    # Формируем текст с участниками
-    response = f"Список участников на игру {message.text}:\n"
+    selected_format = None
+    for format_key, format_label in ADMIN_PARTICIPANTS_FORMAT_LABELS.items():
+        if message.text == format_label:
+            selected_format = format_key
+            break
 
-    # Основные участники
-    regular_participants = [p for p in participants if p[0] not in late_users]
-    late_participants = [p for p in participants if p[0] in late_users]
-    ordered_participants = regular_participants + late_participants
+    if not selected_format:
+        await message.answer("Выберите один из форматов кнопкой ниже.", reply_markup=admin_participants_format_keyboard())
+        return
 
-    for i, (user_id, fn, ln, nick, tg_username, vk_username, platform, platform_user_id) in enumerate(ordered_participants, 1):
-        username_text = build_profile_link(platform, platform_user_id, tg_username, vk_username)
-        mark = " (думает)" if user_id in thinking_users else ""
-        late_mark = " (опоздает)" if user_id in late_users else ""
-        response += f"{i}. {fn} {ln} ({nick}, {username_text}){mark}{late_mark}\n"
+    state_data = await state.get_data()
+    game_id = state_data.get("admin_participants_game_id")
+    game_title = state_data.get("admin_participants_game_title")
+    if not game_id or not game_title:
+        await message.answer("Не удалось определить игру. Попробуйте снова из админ-меню.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
 
-    # Добавляем думающих, которых нет среди зарегистрированных
-    for uid in thinking_users:
-        if not any(uid == user_id for user_id, *_ in participants):
-            ud = execute_query(
-                "SELECT first_name, last_name, mafia_nick, telegram_username, vk_username, platform, platform_user_id FROM users WHERE user_id=%s",
-                (uid,),
-                fetchone=True
-            )
-            if ud:
-                username_text = build_profile_link(ud[5], ud[6], ud[3], ud[4])
-                response += f"- {ud[0]} {ud[1]} ({ud[2]}, {username_text}) (думает)\n"
-
+    response = await format_admin_participants_with_format(game_id, game_title, selected_format)
     await message.answer(response, reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
 
@@ -2305,6 +2344,30 @@ def vk_option_keyboard(labels, back_label: str = "🔙 Назад"):
     return keyboard.get_keyboard()
 
 
+def vk_admin_participants_format_keyboard():
+    keyboard = VkKeyboard(one_time=True)
+    keyboard.add_button(
+        ADMIN_PARTICIPANTS_FORMAT_LABELS[ADMIN_PARTICIPANTS_FORMAT_NAME],
+        color=VkKeyboardColor.PRIMARY,
+        payload={"participants_format": ADMIN_PARTICIPANTS_FORMAT_NAME},
+    )
+    keyboard.add_line()
+    keyboard.add_button(
+        ADMIN_PARTICIPANTS_FORMAT_LABELS[ADMIN_PARTICIPANTS_FORMAT_NAME_NICK],
+        color=VkKeyboardColor.PRIMARY,
+        payload={"participants_format": ADMIN_PARTICIPANTS_FORMAT_NAME_NICK},
+    )
+    keyboard.add_line()
+    keyboard.add_button(
+        ADMIN_PARTICIPANTS_FORMAT_LABELS[ADMIN_PARTICIPANTS_FORMAT_FULL],
+        color=VkKeyboardColor.PRIMARY,
+        payload={"participants_format": ADMIN_PARTICIPANTS_FORMAT_FULL},
+    )
+    keyboard.add_line()
+    keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
+    return keyboard.get_keyboard()
+
+
 def vk_games_keyboard(games, back_label: str = "🔙 Назад"):
     keyboard = VkKeyboard(one_time=True)
     for index, (game_id, game_name, game_date) in enumerate(games):
@@ -2745,6 +2808,9 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         elif current in {"admin_broadcast_game", "admin_broadcast_custom_users", "admin_broadcast_message"}:
             set_vk_state(internal_user_id, "admin_broadcast_audience")
             send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
+        elif current == "admin_view_participants_format":
+            games = fetch_active_games()
+            send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?", use_game_buttons=True)
         else:
             clear_vk_state(internal_user_id)
             send_vk_message(vk_user_id, "Возвращаюсь в админ-меню.", vk_admin_menu_keyboard())
@@ -3009,9 +3075,38 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             clear_vk_state(internal_user_id)
             send_vk_message(vk_user_id, f"Игра '{game_date} {game_name}' отменена.", vk_admin_menu_keyboard())
             return True
+        set_vk_state(
+            internal_user_id,
+            "admin_view_participants_format",
+            participants_game_id=game_id,
+            participants_game_title=build_game_title(game_name, game_date)
+        )
         send_vk_message(
             vk_user_id,
-            await format_admin_participants_async(game_id, build_game_title(game_name, game_date)),
+            "Выбери формат списка участников:",
+            vk_admin_participants_format_keyboard()
+        )
+        return True
+
+    if current == "admin_view_participants_format":
+        participants_format = payload.get("participants_format")
+        if not participants_format:
+            for format_key, format_label in ADMIN_PARTICIPANTS_FORMAT_LABELS.items():
+                if normalized_text == format_label:
+                    participants_format = format_key
+                    break
+        if participants_format not in ADMIN_PARTICIPANTS_FORMAT_LABELS:
+            send_vk_message(vk_user_id, "Пожалуйста, выбери формат кнопкой ниже.", vk_admin_participants_format_keyboard())
+            return True
+        game_id = state.get("participants_game_id")
+        game_title = state.get("participants_game_title")
+        if not game_id or not game_title:
+            clear_vk_state(internal_user_id)
+            send_vk_message(vk_user_id, "Не удалось определить игру. Возвращаюсь в админ-меню.", vk_admin_menu_keyboard())
+            return True
+        send_vk_message(
+            vk_user_id,
+            await format_admin_participants_with_format(game_id, game_title, participants_format),
             vk_admin_menu_keyboard()
         )
         clear_vk_state(internal_user_id)
