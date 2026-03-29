@@ -2660,7 +2660,7 @@ async def handle_vk_cancel_registration(internal_user_id: int, game_id: int):
     return "Запись отменена. Будем ждать тебя на следующих играх."
 
 
-def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
+def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str, command: str = None):
     state = get_vk_state(internal_user_id)
     current = state.get("state")
     normalized_text = text.strip().lower()
@@ -2693,7 +2693,9 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
         send_vk_message(vk_user_id, "Выбери один из вариантов кнопкой ниже.", vk_confirm_profile_update_keyboard())
         return True
 
-    if current in {"vk_edit_profile_nick", "vk_edit_profile_age"} and normalized_text in {"назад", "🔙 назад"}:
+    if current in {"vk_edit_profile_nick", "vk_edit_profile_age"} and (
+        normalized_text in {"назад", "🔙назад", "🔙 назад"} or command == "back"
+    ):
         clear_vk_state(internal_user_id)
         send_vk_message(vk_user_id, "Хорошо, возвращаю в главное меню.", vk_main_menu_keyboard(internal_user_id))
         return True
@@ -3182,13 +3184,13 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if not user_exists:
-        if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text):
+        if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text, command):
             return
         clear_vk_state(internal_user_id)
         send_vk_message(vk_user_id, "Нажми кнопку «Начать», чтобы запустить бота.", vk_start_keyboard())
         return
 
-    if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text):
+    if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text, command):
         return
 
     state = get_vk_state(internal_user_id)
