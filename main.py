@@ -780,9 +780,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         await message.answer(
             f"С возвращением, {user[2]}!\n"
             "Вижу, что мы с тобой уже знакомились☺️ Хочешь изменить свое имя, фамилию или ник?\n\n"
-            "Напиши текстом:\n"
-            "• «обновить профиль» — чтобы изменить данные\n"
-            "• «оставить как есть» — чтобы перейти в меню"
+            "Выбери один из вариантов кнопками ниже.",
+            reply_markup=confirm_profile_update_keyboard()
         )
         await state.set_state(Form.confirm_profile_update)
         return
@@ -792,7 +791,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "Я бот, который поможет тебе записываться на мафию в клубе настольных игр Тайная комната.\n\n"
         "Если возникнут вопросы - пиши Нате @natabordo\n\n"
         "Готов познакомиться?\n"
-        "Напиши текстом «да» или «нет»."
+        "Выбери ответ кнопкой ниже.",
+        reply_markup=intro_yes_no_keyboard()
     )
     await state.set_state(Form.start)
 
@@ -811,20 +811,21 @@ async def process_confirm_profile_update(message: types.Message, state: FSMConte
         await message.answer("Отлично! Переходим в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
     else:
-        await message.answer("Напиши текстом «обновить профиль» или «оставить как есть».")
+        await message.answer("Пожалуйста, выбери вариант кнопкой ниже.", reply_markup=confirm_profile_update_keyboard())
 
 @dp.message(Form.start)
 async def process_start(message: types.Message, state: FSMContext):
-    if message.text and message.text.lower() == "да":
+    user_text = (message.text or "").strip().lower()
+    if user_text in {"да", "✅ да"}:
         await message.answer(
             "Какой твой игровой ник в мафии?\n\n"
             "P.S. В мафии используют ники для того, чтобы разделять игру и реальную жизнь, и не переносить негативные эмоции на личности игроков"
         )
         await state.set_state(Form.get_nick)
-    elif message.text and message.text.lower() == "нет":
+    elif user_text in {"нет", "❌ нет"}:
         await message.answer("Хорошо, запускай бота снова, когда будешь готов.")
     else:
-        await message.answer("Пожалуйста, напиши «да» или «нет».")
+        await message.answer("Пожалуйста, выбери «Да» или «Нет» кнопкой ниже.", reply_markup=intro_yes_no_keyboard())
 
 @dp.message(Form.get_nick)
 async def process_name(message: types.Message, state: FSMContext):
@@ -2535,6 +2536,36 @@ def vk_yes_no_keyboard():
     return keyboard.get_keyboard()
 
 
+def confirm_profile_update_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="📝 Обновить профиль")
+    builder.button(text="✅ Оставить как есть")
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def intro_yes_no_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="✅ Да")
+    builder.button(text="❌ Нет")
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def vk_start_keyboard():
+    keyboard = VkKeyboard(one_time=True)
+    keyboard.add_button("Начать", color=VkKeyboardColor.PRIMARY, payload={"command": "start"})
+    return keyboard.get_keyboard()
+
+
+def vk_confirm_profile_update_keyboard():
+    keyboard = VkKeyboard(one_time=True)
+    keyboard.add_button("📝 Обновить профиль", color=VkKeyboardColor.SECONDARY, payload={"command": "edit_profile"})
+    keyboard.add_line()
+    keyboard.add_button("✅ Оставить как есть", color=VkKeyboardColor.PRIMARY, payload={"command": "keep_profile"})
+    return keyboard.get_keyboard()
+
+
 def fetch_vk_user_profile(vk_user_id: int):
     if not vk_api_client:
         return {}
@@ -2717,6 +2748,34 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str):
     state = get_vk_state(internal_user_id)
     current = state.get("state")
     normalized_text = text.strip().lower()
+
+    if current == "awaiting_intro_confirm":
+        if normalized_text in {"да", "✅ да"}:
+            set_vk_state(internal_user_id, "awaiting_nick")
+            send_vk_message(
+                vk_user_id,
+                "Какой твой игровой ник в мафии?\n\n"
+                "P.S. В мафии используют ники для того, чтобы разделять игру и реальную жизнь."
+            )
+            return True
+        if normalized_text in {"нет", "❌ нет"}:
+            clear_vk_state(internal_user_id)
+            send_vk_message(vk_user_id, "Хорошо, напиши «Начать», когда будешь готов.", vk_start_keyboard())
+            return True
+        send_vk_message(vk_user_id, "Пожалуйста, выбери «Да» или «Нет» кнопкой ниже.", vk_yes_no_keyboard())
+        return True
+
+    if current == "vk_confirm_profile_update":
+        if normalized_text in {"📝 обновить профиль", "обновить профиль", "обновить"}:
+            set_vk_state(internal_user_id, "vk_edit_profile_nick")
+            send_vk_message(vk_user_id, "Давай обновим профиль. Какой у тебя сейчас игровой ник в мафии?", vk_back_keyboard())
+            return True
+        if normalized_text in {"✅ оставить как есть", "оставить как есть", "оставить"}:
+            clear_vk_state(internal_user_id)
+            send_vk_message(vk_user_id, "Отлично! Переходим в главное меню.", vk_main_menu_keyboard(internal_user_id))
+            return True
+        send_vk_message(vk_user_id, "Выбери один из вариантов кнопкой ниже.", vk_confirm_profile_update_keyboard())
+        return True
 
     if current in {"vk_edit_profile_nick", "vk_edit_profile_age"} and normalized_text in {"назад", "🔙 назад"}:
         clear_vk_state(internal_user_id)
@@ -3184,20 +3243,33 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
     internal_user_id = make_internal_user_id(PLATFORM_VK, vk_user_id)
     user_exists = execute_query("SELECT 1 FROM users WHERE user_id = %s", (internal_user_id,), fetchone=True)
 
-    if normalized_text.lower() in {"start", "начать", "/start"}:
+    if command == "keep_profile":
+        normalized_text = "✅ Оставить как есть"
+    elif command == "edit_profile":
+        normalized_text = "📝 Обновить профиль"
+    elif payload.get("answer") == "yes":
+        normalized_text = "Да"
+    elif payload.get("answer") == "no":
+        normalized_text = "Нет"
+
+    if normalized_text.lower() in {"start", "начать", "/start"} or command == "start":
         if user_exists:
-            send_vk_message(vk_user_id, "С возвращением! Можешь пользоваться меню.", vk_main_menu_keyboard(internal_user_id))
-            clear_vk_state(internal_user_id)
+            set_vk_state(internal_user_id, "vk_confirm_profile_update")
+            send_vk_message(
+                vk_user_id,
+                "С возвращением! Хочешь обновить профиль или оставить как есть?",
+                vk_confirm_profile_update_keyboard()
+            )
         else:
-            set_vk_state(internal_user_id, "awaiting_nick")
-            send_vk_message(vk_user_id, "Привет! Какой у тебя игровой ник в мафии?", vk_remove_keyboard())
+            set_vk_state(internal_user_id, "awaiting_intro_confirm")
+            send_vk_message(vk_user_id, "Привет! Готов познакомиться?", vk_yes_no_keyboard())
         return
 
     if not user_exists:
         if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text):
             return
-        set_vk_state(internal_user_id, "awaiting_nick")
-        send_vk_message(vk_user_id, "Для начала знакомства напиши, пожалуйста, свой игровой ник.")
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, "Нажми кнопку «Начать», чтобы запустить бота.", vk_start_keyboard())
         return
 
     if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text):
