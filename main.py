@@ -861,7 +861,7 @@ async def edit_profile_nick_handler(message: types.Message, state: FSMContext):
 
 @dp.message(Form.edit_profile_name)
 async def edit_profile_name_handler(message: types.Message, state: FSMContext):
-    if message.text == "🔙Назад":
+    if message.text in {"🔙Назад", "🔙 Назад"}:
         await message.answer("Хорошо, возвращаю в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
         return
@@ -872,7 +872,7 @@ async def edit_profile_name_handler(message: types.Message, state: FSMContext):
 
 @dp.message(Form.edit_profile_lastname)
 async def edit_profile_lastname_handler(message: types.Message, state: FSMContext):
-    if message.text == "🔙Назад":
+    if message.text in {"🔙Назад", "🔙 Назад"}:
         await message.answer("Хорошо, возвращаю в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
         return
@@ -883,7 +883,7 @@ async def edit_profile_lastname_handler(message: types.Message, state: FSMContex
 
 @dp.message(Form.edit_profile_age)
 async def edit_profile_age_handler(message: types.Message, state: FSMContext):
-    if message.text == "🔙Назад":
+    if message.text in {"🔙Назад", "🔙 Назад"}:
         await message.answer("Хорошо, возвращаю в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
         return
