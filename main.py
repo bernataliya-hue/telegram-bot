@@ -36,6 +36,7 @@ VK_BOT_TOKEN_ENV = os.environ.get("VK_BOT_TOKEN")
 VK_TOKEN_ENV = os.environ.get("VK_TOKEN")
 VK_TOKEN = VK_BOT_TOKEN_ENV or VK_TOKEN_ENV
 VK_GROUP_ID = os.environ.get("VK_GROUP_ID")
+DISABLE_TELEGRAM_POLLING = os.environ.get("DISABLE_TELEGRAM_POLLING", "").strip().lower() in {"1", "true", "yes", "on"}
 ADMIN_ID = 2127578673
 VK_ADMIN_ID = int(os.environ.get("VK_ADMIN_ID") or ADMIN_ID)
 REDIS_URL = os.environ.get("REDIS_URL")
@@ -3478,13 +3479,25 @@ def vk_polling_loop(loop: asyncio.AbstractEventLoop):
 async def main():
     vk_thread = None
     try:
-        # Удаляем вебхук перед запуском polling, чтобы избежать конфликтов
-        await bot.delete_webhook(drop_pending_updates=False)
+        if DISABLE_TELEGRAM_POLLING:
+            logging.warning(
+                "Telegram polling отключен через DISABLE_TELEGRAM_POLLING. "
+                "Запускаем только VK long poll."
+            )
+        else:
+            # Удаляем вебхук перед запуском polling, чтобы избежать конфликтов
+            await bot.delete_webhook(drop_pending_updates=False)
+
         if VK_TOKEN and VK_GROUP_ID:
             vk_thread = threading.Thread(target=vk_polling_loop, args=(asyncio.get_running_loop(),), daemon=True)
             vk_thread.start()
-        # Оставляем pending updates, чтобы пользователям не приходилось заново нажимать кнопки после деплоя
-        await dp.start_polling(bot, skip_updates=False)
+
+        if DISABLE_TELEGRAM_POLLING:
+            while True:
+                await asyncio.sleep(3600)
+        else:
+            # Оставляем pending updates, чтобы пользователям не приходилось заново нажимать кнопки после деплоя
+            await dp.start_polling(bot, skip_updates=False)
     finally:
         await bot.session.close()
 
