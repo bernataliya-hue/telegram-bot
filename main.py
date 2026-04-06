@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 import calendar
 import database
@@ -35,6 +36,7 @@ VK_BOT_TOKEN_ENV = os.environ.get("VK_BOT_TOKEN")
 VK_TOKEN_ENV = os.environ.get("VK_TOKEN")
 VK_TOKEN = VK_BOT_TOKEN_ENV or VK_TOKEN_ENV
 VK_GROUP_ID = os.environ.get("VK_GROUP_ID")
+DISABLE_TELEGRAM_POLLING = os.environ.get("DISABLE_TELEGRAM_POLLING", "").strip().lower() in {"1", "true", "yes", "on"}
 ADMIN_ID = 2127578673
 VK_ADMIN_ID = int(os.environ.get("VK_ADMIN_ID") or ADMIN_ID)
 REDIS_URL = os.environ.get("REDIS_URL")
@@ -43,6 +45,7 @@ PLATFORM_VK = "vk"
 VK_MAX_BUTTONS_ON_LINE = 5
 VK_MAX_LINES = 10
 VK_REMINDER_USERS_PAGE_SIZE = 8
+VK_LONGPOLL_RECONNECT_DELAY_SECONDS = 5
 ADMIN_PARTICIPANTS_FORMAT_NAME = "name_only"
 ADMIN_PARTICIPANTS_FORMAT_NAME_NICK = "name_nick"
 ADMIN_PARTICIPANTS_FORMAT_FULL = "name_nick_link"
@@ -459,7 +462,7 @@ def vk_admin_menu_keyboard():
     keyboard.add_button("♻️Восстановить игру", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_restore_game"})
     keyboard.add_button("🚫Отмена игры", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_cancel_game"})
     keyboard.add_line()
-    keyboard.add_button("👥Список участников", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_view_participants"})
+    keyboard.add_button("👥Список участников админ", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_view_participants"})
     keyboard.add_button("🔔Напомнить об игре", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_reminder"})
     keyboard.add_line()
     keyboard.add_button("📢Рассылка", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_broadcast"})
@@ -2801,7 +2804,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         "❌Удалить игру",
         "♻️Восстановить игру",
         "🚫Отмена игры",
-        "👥Список участников",
+        "👥Список участников админ",
         "🔔Напомнить об игре",
         "📢Рассылка",
         "🏠Главное меню",
@@ -2847,9 +2850,6 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         elif current in {"admin_broadcast_game", "admin_broadcast_custom_users", "admin_broadcast_message"}:
             set_vk_state(internal_user_id, "admin_broadcast_audience")
             send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
-        elif current == "admin_view_participants_format":
-            games = fetch_active_games()
-            send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?", use_game_buttons=True)
         else:
             clear_vk_state(internal_user_id)
             send_vk_message(vk_user_id, "Возвращаюсь в админ-меню.", vk_admin_menu_keyboard())
@@ -3114,38 +3114,10 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             clear_vk_state(internal_user_id)
             send_vk_message(vk_user_id, f"Игра '{game_date} {game_name}' отменена.", vk_admin_menu_keyboard())
             return True
-        set_vk_state(
-            internal_user_id,
-            "admin_view_participants_format",
-            participants_game_id=game_id,
-            participants_game_title=build_game_title(game_name, game_date)
-        )
+        game_title = build_game_title(game_name, game_date)
         send_vk_message(
             vk_user_id,
-            "Выбери формат списка участников:",
-            vk_admin_participants_format_keyboard()
-        )
-        return True
-
-    if current == "admin_view_participants_format":
-        participants_format = payload.get("participants_format")
-        if not participants_format:
-            for format_key, format_label in ADMIN_PARTICIPANTS_FORMAT_LABELS.items():
-                if normalized_text == format_label:
-                    participants_format = format_key
-                    break
-        if participants_format not in ADMIN_PARTICIPANTS_FORMAT_LABELS:
-            send_vk_message(vk_user_id, "Пожалуйста, выбери формат кнопкой ниже.", vk_admin_participants_format_keyboard())
-            return True
-        game_id = state.get("participants_game_id")
-        game_title = state.get("participants_game_title")
-        if not game_id or not game_title:
-            clear_vk_state(internal_user_id)
-            send_vk_message(vk_user_id, "Не удалось определить игру. Возвращаюсь в админ-меню.", vk_admin_menu_keyboard())
-            return True
-        send_vk_message(
-            vk_user_id,
-            await format_admin_participants_with_format(game_id, game_title, participants_format),
+            await format_admin_participants_with_format(game_id, game_title, ADMIN_PARTICIPANTS_FORMAT_NAME_NICK),
             vk_admin_menu_keyboard()
         )
         clear_vk_state(internal_user_id)
@@ -3388,7 +3360,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         send_vk_games_list(vk_user_id, games, "admin_cancel_game", "Какую игру отменить?", use_game_buttons=True)
         return
 
-    if vk_user_id == VK_ADMIN_ID and (normalized_text == "👥Список участников" or command == "admin_view_participants"):
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "👥Список участников админ" or command == "admin_view_participants"):
         games = fetch_active_games()
         send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?", use_game_buttons=True)
         return
@@ -3426,52 +3398,75 @@ def vk_polling_loop(loop: asyncio.AbstractEventLoop):
     )
 
     global vk_session, vk_api_client, vk_longpoll
-    try:
-        vk_session = vk_api.VkApi(token=VK_TOKEN)
-        vk_api_client = vk_session.get_api()
-        vk_longpoll = VkBotLongPoll(vk_session, int(VK_GROUP_ID))
-    except vk_api.exceptions.ApiError as exc:
-        logging.error(
-            "VK long poll не запущен: %s. Проверь, что VK_BOT_TOKEN — это токен сообщества "
-            "с правами на сообщения, а VK_GROUP_ID принадлежит этому сообществу.",
-            exc
-        )
-        return
-    except Exception as exc:
-        logging.exception("Не удалось инициализировать VK long poll: %s", exc)
-        return
+    while True:
+        try:
+            vk_session = vk_api.VkApi(token=VK_TOKEN)
+            vk_api_client = vk_session.get_api()
+            vk_longpoll = VkBotLongPoll(vk_session, int(VK_GROUP_ID))
+        except vk_api.exceptions.ApiError as exc:
+            logging.error(
+                "VK long poll не запущен: %s. Проверь, что VK_BOT_TOKEN — это токен сообщества "
+                "с правами на сообщения, а VK_GROUP_ID принадлежит этому сообществу.",
+                exc
+            )
+            return
+        except Exception as exc:
+            logging.exception("Не удалось инициализировать VK long poll: %s", exc)
+            logging.info(
+                "Повторная попытка запуска VK long poll через %s сек.",
+                VK_LONGPOLL_RECONNECT_DELAY_SECONDS,
+            )
+            time.sleep(VK_LONGPOLL_RECONNECT_DELAY_SECONDS)
+            continue
 
-    logging.info("VK long poll запущен")
+        logging.info("VK long poll запущен")
 
-    try:
-        for event in vk_longpoll.listen():
-            if event.type != VkBotEventType.MESSAGE_NEW:
-                continue
+        try:
+            for event in vk_longpoll.listen():
+                if event.type != VkBotEventType.MESSAGE_NEW:
+                    continue
 
-            message = event.object.message
-            if message.get("from_id", 0) <= 0:
-                continue
+                message = event.object.message
+                if message.get("from_id", 0) <= 0:
+                    continue
 
-            text = message.get("text", "")
-            payload = message.get("payload")
-            future = asyncio.run_coroutine_threadsafe(handle_vk_message(message["from_id"], text, payload), loop)
-            try:
-                future.result()
-            except Exception as exc:
-                logging.exception("Ошибка обработки VK-сообщения: %s", exc)
-    except Exception as exc:
-        logging.exception("VK long poll остановлен из-за ошибки: %s", exc)
+                text = message.get("text", "")
+                payload = message.get("payload")
+                future = asyncio.run_coroutine_threadsafe(handle_vk_message(message["from_id"], text, payload), loop)
+                try:
+                    future.result()
+                except Exception as exc:
+                    logging.exception("Ошибка обработки VK-сообщения: %s", exc)
+        except Exception as exc:
+            logging.exception("VK long poll остановлен из-за ошибки: %s", exc)
+            logging.info(
+                "Переподключаю VK long poll через %s сек.",
+                VK_LONGPOLL_RECONNECT_DELAY_SECONDS,
+            )
+            time.sleep(VK_LONGPOLL_RECONNECT_DELAY_SECONDS)
 
 async def main():
     vk_thread = None
     try:
-        # Удаляем вебхук перед запуском polling, чтобы избежать конфликтов
-        await bot.delete_webhook(drop_pending_updates=False)
+        if DISABLE_TELEGRAM_POLLING:
+            logging.warning(
+                "Telegram polling отключен через DISABLE_TELEGRAM_POLLING. "
+                "Запускаем только VK long poll."
+            )
+        else:
+            # Удаляем вебхук перед запуском polling, чтобы избежать конфликтов
+            await bot.delete_webhook(drop_pending_updates=False)
+
         if VK_TOKEN and VK_GROUP_ID:
             vk_thread = threading.Thread(target=vk_polling_loop, args=(asyncio.get_running_loop(),), daemon=True)
             vk_thread.start()
-        # Оставляем pending updates, чтобы пользователям не приходилось заново нажимать кнопки после деплоя
-        await dp.start_polling(bot, skip_updates=False)
+
+        if DISABLE_TELEGRAM_POLLING:
+            while True:
+                await asyncio.sleep(3600)
+        else:
+            # Оставляем pending updates, чтобы пользователям не приходилось заново нажимать кнопки после деплоя
+            await dp.start_polling(bot, skip_updates=False)
     finally:
         await bot.session.close()
 
