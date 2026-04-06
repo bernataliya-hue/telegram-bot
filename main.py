@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 import calendar
 import database
@@ -43,6 +44,7 @@ PLATFORM_VK = "vk"
 VK_MAX_BUTTONS_ON_LINE = 5
 VK_MAX_LINES = 10
 VK_REMINDER_USERS_PAGE_SIZE = 8
+VK_LONGPOLL_RECONNECT_DELAY_SECONDS = 5
 ADMIN_PARTICIPANTS_FORMAT_NAME = "name_only"
 ADMIN_PARTICIPANTS_FORMAT_NAME_NICK = "name_nick"
 ADMIN_PARTICIPANTS_FORMAT_FULL = "name_nick_link"
@@ -3426,41 +3428,52 @@ def vk_polling_loop(loop: asyncio.AbstractEventLoop):
     )
 
     global vk_session, vk_api_client, vk_longpoll
-    try:
-        vk_session = vk_api.VkApi(token=VK_TOKEN)
-        vk_api_client = vk_session.get_api()
-        vk_longpoll = VkBotLongPoll(vk_session, int(VK_GROUP_ID))
-    except vk_api.exceptions.ApiError as exc:
-        logging.error(
-            "VK long poll не запущен: %s. Проверь, что VK_BOT_TOKEN — это токен сообщества "
-            "с правами на сообщения, а VK_GROUP_ID принадлежит этому сообществу.",
-            exc
-        )
-        return
-    except Exception as exc:
-        logging.exception("Не удалось инициализировать VK long poll: %s", exc)
-        return
+    while True:
+        try:
+            vk_session = vk_api.VkApi(token=VK_TOKEN)
+            vk_api_client = vk_session.get_api()
+            vk_longpoll = VkBotLongPoll(vk_session, int(VK_GROUP_ID))
+        except vk_api.exceptions.ApiError as exc:
+            logging.error(
+                "VK long poll не запущен: %s. Проверь, что VK_BOT_TOKEN — это токен сообщества "
+                "с правами на сообщения, а VK_GROUP_ID принадлежит этому сообществу.",
+                exc
+            )
+            return
+        except Exception as exc:
+            logging.exception("Не удалось инициализировать VK long poll: %s", exc)
+            logging.info(
+                "Повторная попытка запуска VK long poll через %s сек.",
+                VK_LONGPOLL_RECONNECT_DELAY_SECONDS,
+            )
+            time.sleep(VK_LONGPOLL_RECONNECT_DELAY_SECONDS)
+            continue
 
-    logging.info("VK long poll запущен")
+        logging.info("VK long poll запущен")
 
-    try:
-        for event in vk_longpoll.listen():
-            if event.type != VkBotEventType.MESSAGE_NEW:
-                continue
+        try:
+            for event in vk_longpoll.listen():
+                if event.type != VkBotEventType.MESSAGE_NEW:
+                    continue
 
-            message = event.object.message
-            if message.get("from_id", 0) <= 0:
-                continue
+                message = event.object.message
+                if message.get("from_id", 0) <= 0:
+                    continue
 
-            text = message.get("text", "")
-            payload = message.get("payload")
-            future = asyncio.run_coroutine_threadsafe(handle_vk_message(message["from_id"], text, payload), loop)
-            try:
-                future.result()
-            except Exception as exc:
-                logging.exception("Ошибка обработки VK-сообщения: %s", exc)
-    except Exception as exc:
-        logging.exception("VK long poll остановлен из-за ошибки: %s", exc)
+                text = message.get("text", "")
+                payload = message.get("payload")
+                future = asyncio.run_coroutine_threadsafe(handle_vk_message(message["from_id"], text, payload), loop)
+                try:
+                    future.result()
+                except Exception as exc:
+                    logging.exception("Ошибка обработки VK-сообщения: %s", exc)
+        except Exception as exc:
+            logging.exception("VK long poll остановлен из-за ошибки: %s", exc)
+            logging.info(
+                "Переподключаю VK long poll через %s сек.",
+                VK_LONGPOLL_RECONNECT_DELAY_SECONDS,
+            )
+            time.sleep(VK_LONGPOLL_RECONNECT_DELAY_SECONDS)
 
 async def main():
     vk_thread = None
