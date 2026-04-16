@@ -393,6 +393,7 @@ class Form(StatesGroup):
     edit_schedule = State()
     confirm_profile_update = State()
     admin_reminder = State()
+    admin_get_announcement = State()
     admin_reminder_audience = State()
     admin_reminder_custom_users = State()
     admin_broadcast = State()
@@ -430,6 +431,7 @@ def admin_menu_keyboard():
     builder.button(text="♻️Восстановить игру")
     builder.button(text="🚫Отмена игры")
     builder.button(text="🔔Напомнить об игре")
+    builder.button(text="📣Получить анонс")
     builder.button(text="📢Рассылка")
     builder.button(text="👥Список участников")
     builder.button(text="✍️Ручная запись игрока")
@@ -662,6 +664,26 @@ def get_game_cost(game_name):
     elif "Городская мафия" in game_name:
         return city_rules
     return "\n"
+
+def get_announcement_cost_info(game_name: str) -> str:
+    if "Рейтинговая игра" in game_name:
+        return "Стоимость игр 800 руб. с человека. По абонементу - 200 руб."
+    return "Стоимость игр 600 руб. с человека. По абонементу - бесплатно."
+
+
+def build_admin_announcement_text(game_date: str, game_name: str) -> str:
+    return (
+        "Всем привет!\n"
+        "На этой неделе играем в городскую мафию.\n\n"
+        f"{game_date} {game_name}\n"
+        f"{get_game_rules(game_name)}"
+        f"💵{get_announcement_cost_info(game_name)} 💵\n\n"
+        "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
+        "🎁 Если вы пришли вдвоем - платите одним переводом 1 000 руб. \n"
+        "❗️Скидки и акции не суммируются❗️\n\n"
+        "Запись через бота: @mafiya_TK_bot 🤖\n\n"
+        "P.S. Если на улице мокро, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏"
+    )
 
 
 def build_registration_success_text(game_date: str, game_name: str) -> str:
@@ -1004,6 +1026,18 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         builder.adjust(1)
         await message.answer("Выберите игру, о которой нужно напомнить:", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.admin_reminder)
+    elif message.text == "📣Получить анонс":
+        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
+        if not games:
+            await message.answer("Список игр пуст.")
+            return
+        builder = ReplyKeyboardBuilder()
+        for _, name, date in games:
+            builder.button(text=f"{date} {name}")
+        builder.button(text="🔙Назад")
+        builder.adjust(1)
+        await message.answer("Выберите игру для анонса:", reply_markup=builder.as_markup(resize_keyboard=True))
+        await state.set_state(Form.admin_get_announcement)
     elif message.text == "📢Рассылка":
         builder = ReplyKeyboardBuilder()
         builder.button(text="👥Всем пользователям")
@@ -1928,6 +1962,26 @@ async def admin_reminder_handler(message: types.Message, state: FSMContext):
         await state.set_state(Form.admin_reminder_audience)
     else:
         await message.answer("Игра не найдена. Попробуйте выбрать игру из списка еще раз.")
+
+@dp.message(Form.admin_get_announcement)
+async def admin_get_announcement_handler(message: types.Message, state: FSMContext):
+    if message.text in {"🔙Назад", "🔙 Назад"}:
+        await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+
+    result = execute_query(
+        "SELECT game_name, game_date FROM games WHERE game_date || ' ' || game_name = %s AND is_deleted = FALSE",
+        (message.text,),
+        fetchone=True
+    )
+    if not result:
+        await message.answer("Игра не найдена. Попробуйте выбрать игру из списка еще раз.")
+        return
+
+    game_name, game_date = result
+    await message.answer(build_admin_announcement_text(game_date, game_name), reply_markup=admin_menu_keyboard())
+    await state.set_state(Form.admin_menu)
 
 @dp.message(Form.admin_reminder_audience)
 async def admin_reminder_audience_handler(message: types.Message, state: FSMContext):
