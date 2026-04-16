@@ -408,7 +408,6 @@ class Form(StatesGroup):
     admin_manual_register_last_name = State()
     admin_manual_register_nick = State()
     admin_manual_register_action = State()
-    admin_get_announcement_game = State()
 
 # Главное меню
 def main_menu_keyboard(user_id):
@@ -434,7 +433,6 @@ def admin_menu_keyboard():
     builder.button(text="📢Рассылка")
     builder.button(text="👥Список участников")
     builder.button(text="✍️Ручная запись игрока")
-    builder.button(text="📣Получить анонс")
     builder.button(text="🏠Главное меню")
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
@@ -664,60 +662,6 @@ def get_game_cost(game_name):
     elif "Городская мафия" in game_name:
         return city_rules
     return "\n"
-
-
-def get_announcement_time_slots(game_name: str):
-    if "Рейтинговая игра" in game_name:
-        return "18:30", "19:00"
-    return "18:00", "18:30"
-
-
-def get_announcement_cost_info(game_name: str) -> str:
-    if "Рейтинговая игра" in game_name:
-        return "Стоимость игр 800 руб. с человека.\nПо абонементу — 200 руб."
-    return "Стоимость игр 600 руб. с человека.\nПо абонементу — бесплатно."
-
-
-def get_announcement_game_name(game_name: str) -> str:
-    return game_name.replace("🏙️", "").replace("🌃", "").replace("🏆", "").strip()
-
-
-def format_game_date_for_announcement(game_date: str) -> str:
-    parsed = parse_game_date(game_date)
-    if not parsed:
-        return game_date
-
-    weekdays = {
-        0: "Понедельник",
-        1: "Вторник",
-        2: "Среда",
-        3: "Четверг",
-        4: "Пятница",
-        5: "Суббота",
-        6: "Воскресенье",
-    }
-    return f"{weekdays[parsed.weekday()]} {parsed.strftime('%d.%m')}"
-
-
-def build_game_announcement_text(game_date: str, game_name: str) -> str:
-    announcement_date = format_game_date_for_announcement(game_date)
-    normalized_game_name = get_announcement_game_name(game_name)
-    gathering_time, start_time = get_announcement_time_slots(game_name)
-    cost_info = get_announcement_cost_info(game_name)
-
-    return (
-        "Всем привет!\n"
-        "На этой неделе играем в городскую мафию.\n\n"
-        f"📆{announcement_date} 🌃{normalized_game_name}\n"
-        f"{gathering_time} – сбор и объяснение правил\n"
-        f"{start_time} – начало игр\n\n"
-        f"💵{cost_info} 💵\n\n"
-        "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
-        "🎁 Если вы пришли вдвоем - платите одним переводом 1 000 руб.\n"
-        "❗️Скидки и акции не суммируются❗️\n\n"
-        "Запись через бота: @mafiya_TK_bot 🤖\n\n"
-        "P.S. Если на улице мокро, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏"
-    )
 
 
 def build_registration_success_text(game_date: str, game_name: str) -> str:
@@ -1060,21 +1004,6 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         builder.adjust(1)
         await message.answer("Выберите игру, о которой нужно напомнить:", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.admin_reminder)
-    elif message.text == "📣Получить анонс":
-        games = sort_games_by_date(filter_upcoming_games(execute_query(
-            "SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE",
-            fetch=True
-        )))
-        if not games:
-            await message.answer("Список будущих игр пуст.")
-            return
-        builder = ReplyKeyboardBuilder()
-        for _, name, date in games:
-            builder.button(text=f"{date} {name}")
-        builder.button(text="🔙Назад")
-        builder.adjust(1)
-        await message.answer("Выберите игру для формирования анонса:", reply_markup=builder.as_markup(resize_keyboard=True))
-        await state.set_state(Form.admin_get_announcement_game)
     elif message.text == "📢Рассылка":
         builder = ReplyKeyboardBuilder()
         builder.button(text="👥Всем пользователям")
@@ -1088,37 +1017,6 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
     elif message.text == "🏠Главное меню":
         await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
-
-
-@dp.message(Form.admin_get_announcement_game)
-async def admin_get_announcement_game_handler(message: types.Message, state: FSMContext):
-    if message.text in {"🔙Назад", "🔙 Назад"}:
-        await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
-        await state.set_state(Form.admin_menu)
-        return
-
-    selected = execute_query(
-        """
-        SELECT game_name, game_date
-        FROM games
-        WHERE is_deleted = FALSE
-          AND (game_date || ' ' || game_name = %s OR game_name || ' ' || game_date = %s)
-        """,
-        (message.text, message.text),
-        fetchone=True
-    )
-    if not selected:
-        await message.answer("Игра не найдена. Выберите игру кнопкой из списка.")
-        return
-
-    game_name, game_date = selected
-    announcement_text = build_game_announcement_text(game_date, game_name)
-    await message.answer(
-        "Готово! Ниже текст анонса, можно копировать и отправлять:\n\n"
-        f"{announcement_text}",
-        reply_markup=admin_menu_keyboard()
-    )
-    await state.set_state(Form.admin_menu)
 
 @dp.callback_query(SimpleCalendarCallback.filter())
 async def process_simple_calendar(callback_query: types.CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext):
