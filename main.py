@@ -770,13 +770,14 @@ async def process_confirm_profile_update(message: types.Message, state: FSMConte
 @dp.message(Form.start)
 async def process_start(message: types.Message, state: FSMContext):
     user_text = (message.text or "").strip().lower()
-    if user_text in {"да", "✅ да"}:
+    normalized_text = user_text.replace(" ", "")
+    if normalized_text in {"да", "✅да"}:
         await message.answer(
             "Какой твой игровой ник в мафии?\n\n"
             "P.S. В мафии используют ники для того, чтобы разделять игру и реальную жизнь, и не переносить негативные эмоции на личности игроков"
         )
         await state.set_state(Form.get_nick)
-    elif user_text in {"нет", "❌ нет"}:
+    elif normalized_text in {"нет", "❌нет"}:
         await message.answer("Хорошо, запускай бота снова, когда будешь готов.")
     else:
         await message.answer("Пожалуйста, выбери «Да» или «Нет» кнопкой ниже.", reply_markup=intro_yes_no_keyboard())
