@@ -3481,7 +3481,18 @@ def vk_polling_loop(loop: asyncio.AbstractEventLoop):
                 if event.type != VkBotEventType.MESSAGE_NEW:
                     continue
 
-                message = event.object.message
+                event_object = event.object
+                if isinstance(event_object, dict):
+                    message = event_object.get("message") or event_object
+                else:
+                    message = getattr(event_object, "message", None)
+                    if message is None and hasattr(event_object, "get"):
+                        message = event_object.get("message")
+
+                if not isinstance(message, dict):
+                    logging.warning("Пропуск VK события: не удалось извлечь message из event.object=%r", event_object)
+                    continue
+
                 if message.get("from_id", 0) <= 0:
                     continue
 
