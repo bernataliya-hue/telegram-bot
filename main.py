@@ -38,6 +38,8 @@ VK_TOKEN = VK_BOT_TOKEN_ENV or VK_TOKEN_ENV
 VK_GROUP_ID = os.environ.get("VK_GROUP_ID")
 DISABLE_TELEGRAM_POLLING = os.environ.get("DISABLE_TELEGRAM_POLLING", "").strip().lower() in {"1", "true", "yes", "on"}
 ADMIN_ID = 2127578673
+SECOND_ADMIN_ID = 703800719
+ADMIN_IDS = {ADMIN_ID, SECOND_ADMIN_ID}
 VK_ADMIN_ID = int(os.environ.get("VK_ADMIN_ID") or ADMIN_ID)
 REDIS_URL = os.environ.get("REDIS_URL")
 PLATFORM_TELEGRAM = "telegram"
@@ -242,7 +244,12 @@ async def send_text_to_user(user_id: int, text: str, parse_mode: str = None, rep
 
 
 async def notify_admin(text: str):
-    await bot.send_message(ADMIN_ID, text)
+    for admin_id in ADMIN_IDS:
+        await bot.send_message(admin_id, text)
+
+
+def is_telegram_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 
 def build_game_title(game_name: str, game_date: str) -> str:
@@ -419,7 +426,7 @@ def main_menu_keyboard(user_id):
     builder.button(text="📅Расписание игр")
     builder.button(text="👥Список участников")
     builder.button(text="📍Как до нас добраться?")
-    if user_id == ADMIN_ID:
+    if is_telegram_admin(user_id):
         builder.button(text="⚙️Админ-панель")
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
@@ -947,7 +954,7 @@ async def edit_profile_age_handler(message: types.Message, state: FSMContext):
 
 @dp.message(Form.menu, F.text == "⚙️Админ-панель")
 async def admin_panel(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if not is_telegram_admin(message.from_user.id):
         return
     await message.answer("Добро пожаловать в админ-панель!", reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
