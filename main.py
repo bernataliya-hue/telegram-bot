@@ -3674,6 +3674,29 @@ def vk_polling_loop(loop: asyncio.AbstractEventLoop):
 
         try:
             for event in vk_longpoll.listen():
+                if event.type == VkBotEventType.MESSAGE_ALLOW:
+                    event_object = event.object
+                    if isinstance(event_object, dict):
+                        vk_user_id = event_object.get("user_id")
+                    else:
+                        vk_user_id = getattr(event_object, "user_id", None)
+                        if vk_user_id is None and hasattr(event_object, "get"):
+                            vk_user_id = event_object.get("user_id")
+
+                    if not vk_user_id:
+                        logging.warning("Пропуск VK message_allow: не удалось извлечь user_id из event.object=%r", event_object)
+                        continue
+
+                    future = asyncio.run_coroutine_threadsafe(
+                        handle_vk_message(int(vk_user_id), "Начать", {"command": "start"}),
+                        loop,
+                    )
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        logging.exception("Ошибка обработки VK message_allow: %s", exc)
+                    continue
+
                 if event.type != VkBotEventType.MESSAGE_NEW:
                     continue
 
