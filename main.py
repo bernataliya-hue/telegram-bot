@@ -3374,6 +3374,11 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
     elif payload.get("answer") == "no":
         normalized_text = "Нет"
 
+    current_state = get_vk_state(internal_user_id).get("state")
+    if current_state == "awaiting_intro_confirm" and normalized_text.lower() in {"да", "✅да", "нет", "❌нет"}:
+        if handle_vk_profile_step(internal_user_id, vk_user_id, normalized_text, command):
+            return
+
     if normalized_text.lower() in {"start", "начать", "/start"} or command == "start":
         if user_exists:
             set_vk_state(internal_user_id, "vk_confirm_profile_update")
