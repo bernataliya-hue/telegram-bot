@@ -248,6 +248,59 @@ async def notify_admin(text: str):
         await bot.send_message(admin_id, text)
 
 
+def build_new_user_notification_text(
+    platform: str,
+    platform_user_id: int,
+    first_name: str,
+    last_name: str,
+    mafia_nick: str,
+    age: int,
+    telegram_username: str = None,
+    vk_username: str = None,
+) -> str:
+    platform_label = "Telegram" if platform == PLATFORM_TELEGRAM else "VK"
+    username = telegram_username or vk_username
+    username_line = f"@{username}" if telegram_username else (f"vk.com/{username}" if vk_username else "не указан")
+    profile_link = build_profile_link(platform, platform_user_id, telegram_username, vk_username)
+
+    return (
+        "👤 Новый пользователь зарегистрировался в боте\n"
+        f"Платформа: {platform_label}\n"
+        f"Имя: {first_name} {last_name}\n"
+        f"Ник в мафии: {mafia_nick}\n"
+        f"Возраст: {age}\n"
+        f"Username: {username_line}\n"
+        f"Профиль: {profile_link}"
+    )
+
+
+async def notify_admin_about_new_user(
+    platform: str,
+    platform_user_id: int,
+    first_name: str,
+    last_name: str,
+    mafia_nick: str,
+    age: int,
+    telegram_username: str = None,
+    vk_username: str = None,
+):
+    try:
+        await notify_admin(
+            build_new_user_notification_text(
+                platform=platform,
+                platform_user_id=platform_user_id,
+                first_name=first_name,
+                last_name=last_name,
+                mafia_nick=mafia_nick,
+                age=age,
+                telegram_username=telegram_username,
+                vk_username=vk_username,
+            )
+        )
+    except Exception as e:
+        logging.warning(f"Не удалось отправить админу уведомление о новом пользователе: {e}")
+
+
 def is_telegram_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
@@ -853,6 +906,15 @@ async def process_age(message: types.Message, state: FSMContext):
     await state.update_data(age=age)
     data = await state.get_data()
     upsert_user(
+        platform=PLATFORM_TELEGRAM,
+        platform_user_id=message.from_user.id,
+        first_name=data['first_name'],
+        last_name=data['last_name'],
+        mafia_nick=data['mafia_nick'],
+        age=age,
+        telegram_username=message.from_user.username,
+    )
+    await notify_admin_about_new_user(
         platform=PLATFORM_TELEGRAM,
         platform_user_id=message.from_user.id,
         first_name=data['first_name'],
