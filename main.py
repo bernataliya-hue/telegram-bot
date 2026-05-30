@@ -2894,7 +2894,8 @@ def handle_vk_profile_step(internal_user_id: int, vk_user_id: int, text: str, co
             send_vk_message(
                 vk_user_id,
                 "Какой твой игровой ник в мафии?\n\n"
-                "P.S. В мафии используют ники для того, чтобы разделять игру и реальную жизнь."
+                "P.S. В мафии используют ники для того, чтобы разделять игру и реальную жизнь.",
+                vk_remove_keyboard(),
             )
             return True
         if normalized_text in {"нет", "❌нет"}:
@@ -3383,7 +3384,16 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
             )
         else:
             set_vk_state(internal_user_id, "awaiting_intro_confirm")
-            send_vk_message(vk_user_id, "Привет! Готов познакомиться?", vk_yes_no_keyboard())
+            send_vk_message(
+                vk_user_id,
+                "Привет!👋\n"
+                "Я бот, который поможет тебе записываться на мафию в клубе настольных игр Тайная комната.\n\n"
+                "Здесь можно выбрать подходящую игру, записаться на неё, отменить запись, "
+                "посмотреть расписание и списки участников.\n\n"
+                "Если возникнут вопросы — пиши Нате @natabordo\n\n"
+                "Готов познакомиться?",
+                vk_yes_no_keyboard(),
+            )
         return
 
     if not user_exists:
