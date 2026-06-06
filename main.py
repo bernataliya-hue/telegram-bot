@@ -708,7 +708,20 @@ async def is_game_full(game_id: int, game_name: str, user_id: int) -> bool:
     limit = get_game_limit(game_name) + late_registered_count
     return len(registered_ids) >= limit
 
-def get_game_rules(game_name):
+WEEKDAY_GAME_RULES = "19:00 – сбор и объяснение правил\n19:30 – начало игр\n\n"
+
+
+def is_weekday_game(game_date: str) -> bool:
+    parsed = parse_game_date(game_date)
+    if not parsed:
+        return False
+    return parsed.weekday() < 5
+
+
+def get_game_rules(game_name: str, game_date: str = None):
+    if is_weekday_game(game_date):
+        return WEEKDAY_GAME_RULES
+
     sport_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     city_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     rating_rules = "19:00 – начало игр\n\n"
@@ -745,7 +758,7 @@ def build_admin_announcement_text(game_date: str, game_name: str) -> str:
         "Всем привет!\n"
         "На этой неделе играем в городскую мафию.\n\n"
         f"{game_date} {game_name}\n"
-        f"{get_game_rules(game_name)}"
+        f"{get_game_rules(game_name, game_date)}"
         f"💵{get_announcement_cost_info(game_name)} 💵\n\n"
         "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
         "🎁 Если вы пришли вдвоем - платите одним переводом 1 000 руб. \n"
@@ -758,7 +771,7 @@ def build_admin_announcement_text(game_date: str, game_name: str) -> str:
 def build_registration_success_text(game_date: str, game_name: str) -> str:
     return (
         f"Ты успешно записался на игру {game_date} {game_name}!\n\n"
-        f"{get_game_rules(game_name)}"
+        f"{get_game_rules(game_name, game_date)}"
         f"{get_game_cost(game_name)}"
         "Оплачиваете после игры\n\n"
         "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
@@ -1563,7 +1576,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
             schedule_text += f"📆{date} {display_name}\n"
-            schedule_text += get_game_rules(display_name)
+            schedule_text += get_game_rules(display_name, date)
         await message.answer(schedule_text.strip(), parse_mode="HTML")
     elif message.text == "📍Как до нас добраться?":
         await message.answer(
@@ -2284,14 +2297,14 @@ async def send_game_reminders(user_ids, game_id, thinking_decision: bool = False
                 if detect_platform_by_user_id(uid) == PLATFORM_TELEGRAM:
                     await bot.send_message(
                         get_platform_user_id(uid),
-                        f"Привет! Пора определиться, пойдешь играть? *{g_date} {g_name}*",
+                        f"Привет! Пора определиться, пойдешь играть? *{g_date} {g_name}*\n{get_game_rules(g_name, g_date).strip()}",
                         parse_mode="Markdown",
                         reply_markup=thinking_reminder_keyboard(game_id)
                     )
                 else:
                     await send_text_to_user(
                         uid,
-                        f"Привет! Пора определиться, пойдешь играть? *{g_date} {g_name}*",
+                        f"Привет! Пора определиться, пойдешь играть? *{g_date} {g_name}*\n{get_game_rules(g_name, g_date).strip()}",
                         reply_markup=vk_thinking_reminder_actions_keyboard(game_id)
                     )
                 count += 1
@@ -2318,13 +2331,13 @@ async def send_game_reminders(user_ids, game_id, thinking_decision: bool = False
             if detect_platform_by_user_id(uid) == PLATFORM_TELEGRAM:
                 await bot.send_message(
                     get_platform_user_id(uid),
-                    f"🔔Напоминание об игре: {g_date} {g_name}\nБудем вас ждать!😊",
+                    f"🔔Напоминание об игре: {g_date} {g_name}\n{get_game_rules(g_name, g_date).strip()}\nБудем вас ждать!😊",
                     reply_markup=builder.as_markup()
                 )
             else:
                 await send_text_to_user(
                     uid,
-                    f"🔔Напоминание об игре: {g_date} {g_name}\nБудем вас ждать!😊",
+                    f"🔔Напоминание об игре: {g_date} {g_name}\n{get_game_rules(g_name, g_date).strip()}\nБудем вас ждать!😊",
                     reply_markup=vk_reminder_actions_keyboard(game_id, bool(row and row[0] == "registered"))
                 )
 
@@ -3569,7 +3582,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         lines = ["Расписание ближайших игр:\n"]
         for _, game_name, game_date in games:
             lines.append(f"📆{game_date} {game_name}")
-            lines.append(get_game_rules(game_name).strip())
+            lines.append(get_game_rules(game_name, game_date).strip())
             lines.append(f"\n")
         send_vk_message(vk_user_id, "\n".join(line for line in lines if line), vk_main_menu_keyboard(internal_user_id))
         return
