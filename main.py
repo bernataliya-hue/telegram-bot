@@ -661,6 +661,19 @@ def thinking_reminder_keyboard(game_id: int):
     builder.adjust(1)
     return builder.as_markup()
 
+
+def reminder_actions_keyboard(game_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📝Записаться", callback_data=f"reg_{game_id}")
+    builder.button(text="🤔Думаю", callback_data=f"think_{game_id}")
+    builder.button(text="❌Не приду", callback_data=f"decline_{game_id}")
+    builder.adjust(3)
+    return builder.as_markup()
+
+
+def reminder_game_text(game_name: str, game_date: str) -> str:
+    return f"{game_date} {game_name}\n{get_game_rules(game_name, game_date).strip()}"
+
 def parse_game_date(game_date: str):
     if not game_date:
         return None
@@ -1158,12 +1171,11 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         if not games:
             await message.answer("Список игр пуст.")
             return
-        builder = ReplyKeyboardBuilder()
-        for _, name, date in games:
-            builder.button(text=f"{date} {name}")
-        builder.button(text="🔙Назад")
-        builder.adjust(1)
-        await message.answer("Выберите игру, о которой нужно напомнить:", reply_markup=builder.as_markup(resize_keyboard=True))
+        await state.update_data(reminder_games=games, reminder_game_ids=[])
+        await message.answer(
+            "Выберите одну или несколько игр:",
+            reply_markup=telegram_reminder_games_keyboard(games, []),
+        )
         await state.set_state(Form.admin_reminder)
     elif message.text == "📣Получить анонс":
         games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
@@ -2201,28 +2213,41 @@ async def admin_cancel_game_handler(message: types.Message, state: FSMContext):
 
 @dp.message(Form.admin_reminder)
 async def admin_reminder_handler(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Назад":
+    if message.text in {"🔙Назад", "🔙 Назад"}:
         await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
         return
+    await message.answer("Выберите игры кнопками под сообщением.")
 
-    clean_text = message.text.replace("📆", "").strip() if message.text else ""
-    result = execute_query("SELECT game_id FROM games WHERE game_date || ' ' || game_name = %s OR '📆' || game_date || ' ' || game_name = %s OR game_date || ' ' || game_name = %s", (clean_text, message.text, message.text), fetchone=True)
 
-    if result:
-        await state.update_data(reminder_game_id=result[0], reminder_game_text=message.text)
-        builder = ReplyKeyboardBuilder()
-        builder.button(text="👥Всем пользователям")
-        builder.button(text="✅Только записавшимся")
-        builder.button(text="❌Только не записавшимся")
-        builder.button(text="🤔Думающим игрокам")
-        builder.button(text="👤Выбор пользователей")
-        builder.button(text="🔙Назад")
-        builder.adjust(1)
-        await message.answer("Кому отправить напоминание?", reply_markup=builder.as_markup(resize_keyboard=True))
+@dp.callback_query(Form.admin_reminder, F.data.startswith("remgame_"))
+async def admin_reminder_games_handler(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    games = data.get("reminder_games", [])
+    selected = set(data.get("reminder_game_ids", []))
+    action = callback.data.replace("remgame_", "", 1)
+
+    if action == "done":
+        if not selected:
+            await callback.answer("Выберите хотя бы одну игру.", show_alert=True)
+            return
+        await callback.message.edit_text(
+            f"Выбрано игр: {len(selected)}.",
+            reply_markup=None,
+        )
+        await callback.message.answer("Кому отправить напоминание?", reply_markup=admin_reminder_audience_keyboard())
         await state.set_state(Form.admin_reminder_audience)
+        await callback.answer()
+        return
+
+    game_id = int(action)
+    if game_id in selected:
+        selected.remove(game_id)
     else:
-        await message.answer("Игра не найдена. Попробуйте выбрать игру из списка еще раз.")
+        selected.add(game_id)
+    await state.update_data(reminder_game_ids=list(selected))
+    await callback.message.edit_reply_markup(reply_markup=telegram_reminder_games_keyboard(games, selected))
+    await callback.answer()
 
 @dp.message(Form.admin_get_announcement)
 async def admin_get_announcement_handler(message: types.Message, state: FSMContext):
@@ -2247,42 +2272,38 @@ async def admin_get_announcement_handler(message: types.Message, state: FSMConte
 @dp.message(Form.admin_reminder_audience)
 async def admin_reminder_audience_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙Назад":
-        games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games", fetch=True))
+        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
         if not games:
             await message.answer("Список игр пуст.", reply_markup=admin_menu_keyboard())
             await state.set_state(Form.admin_menu)
             return
 
-        builder = ReplyKeyboardBuilder()
-        for _, name, date in games:
-            builder.button(text=f"{date} {name}")
-        builder.button(text="🔙Назад")
-        builder.adjust(1)
-        await message.answer("Выберите игру, о которой нужно напомнить:", reply_markup=builder.as_markup(resize_keyboard=True))
+        await state.update_data(reminder_games=games, reminder_game_ids=[])
+        await message.answer("Выберите одну или несколько игр:", reply_markup=telegram_reminder_games_keyboard(games, []))
         await state.set_state(Form.admin_reminder)
         return
 
     data = await state.get_data()
-    game_id = data.get('reminder_game_id')
+    game_ids = data.get('reminder_game_ids', [])
 
     target_users = []
     if message.text == "👥Всем пользователям":
         rows = execute_query("SELECT user_id FROM users", fetch=True)
         target_users = [r[0] for r in rows]
     elif message.text == "✅Только записавшимся":
-        rows = execute_query("SELECT user_id FROM registrations WHERE game_id = %s", (game_id,), fetch=True)
+        rows = execute_query("SELECT DISTINCT user_id FROM registrations WHERE game_id = ANY(%s) AND status = 'registered'", (game_ids,), fetch=True)
         target_users = [r[0] for r in rows]
     elif message.text == "❌Только не записавшимся":
-        rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = %s)", (game_id,), fetch=True)
+        rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = ANY(%s) AND status = 'registered')", (game_ids,), fetch=True)
         target_users = [r[0] for r in rows]
     elif message.text == "🤔Думающим игрокам":
-        rows = execute_query("SELECT user_id FROM thinking_players WHERE game_id = %s", (game_id,), fetch=True)
+        rows = execute_query("SELECT DISTINCT user_id FROM thinking_players WHERE game_id = ANY(%s)", (game_ids,), fetch=True)
         target_users = [r[0] for r in rows]
         if not target_users:
             await message.answer("Нет думающих игроков для этой игры.", reply_markup=admin_menu_keyboard())
             await state.set_state(Form.admin_menu)
             return
-        count = await send_game_reminders(target_users, game_id, thinking_decision=True)
+        count = await send_game_reminders(target_users, game_ids)
         await message.answer(f"Напоминания отправлены {count} думающим игрокам.", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
         return
@@ -2312,7 +2333,7 @@ async def admin_reminder_audience_handler(message: types.Message, state: FSMCont
         await state.set_state(Form.admin_menu)
         return
 
-    count = await send_game_reminders(target_users, game_id)
+    count = await send_game_reminders(target_users, game_ids)
     await message.answer(f"Напоминания отправлены {count} пользователям.", reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
 
@@ -2329,8 +2350,8 @@ async def process_user_selection(callback: types.CallbackQuery, state: FSMContex
             await callback.answer("Никто не выбран!", show_alert=True)
             return
 
-        game_id = data.get('reminder_game_id')
-        count = await send_game_reminders(selected, game_id)
+        game_ids = data.get('reminder_game_ids', [])
+        count = await send_game_reminders(selected, game_ids)
         await callback.message.edit_text(f"Напоминания отправлены {count} выбранным пользователям.")
         await callback.message.answer("Возвращаюсь в админ-меню.", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
@@ -2356,78 +2377,52 @@ async def process_user_selection(callback: types.CallbackQuery, state: FSMContex
 
     await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
 
-async def send_game_reminders(user_ids, game_id, thinking_decision: bool = False):
+async def send_game_reminders(user_ids, game_ids):
     count = 0
-
-    game_data = execute_query(
-        "SELECT game_name, game_date FROM games WHERE game_id = %s",
-        (game_id,),
-        fetchone=True
-    )
-
-    if not game_data:
+    if isinstance(game_ids, int):
+        game_ids = [game_ids]
+    if not game_ids:
         return 0
-
-    g_name, g_date = game_data
+    games = execute_query(
+        "SELECT game_id, game_name, game_date FROM games WHERE game_id = ANY(%s) AND is_deleted = FALSE",
+        (list(game_ids),),
+        fetch=True,
+    )
+    games = sort_games_by_date(games)
+    if not games:
+        return 0
 
     for uid in user_ids:
         try:
-            row = execute_query(
-                "SELECT status FROM registrations WHERE user_id=%s AND game_id=%s",
-                (uid, game_id),
-                fetchone=True
-            )
+            platform = detect_platform_by_user_id(uid)
+            if platform == PLATFORM_TELEGRAM:
+                await bot.send_message(
+                    get_platform_user_id(uid),
+                    "🔔 Привет! На этой неделе играем в мафию:",
+                )
+            else:
+                await send_text_to_user(uid, "🔔 Привет! На этой неделе играем в мафию:")
 
-            if thinking_decision:
-                if detect_platform_by_user_id(uid) == PLATFORM_TELEGRAM:
+            for game_id, g_name, g_date in games:
+                if platform == PLATFORM_TELEGRAM:
                     await bot.send_message(
                         get_platform_user_id(uid),
-                        f"Привет! Пора определиться, пойдешь играть? *{g_date} {g_name}*\n{get_game_rules(g_name, g_date).strip()}",
-                        parse_mode="Markdown",
-                        reply_markup=thinking_reminder_keyboard(game_id)
+                        reminder_game_text(g_name, g_date),
+                        reply_markup=reminder_actions_keyboard(game_id),
                     )
                 else:
                     await send_text_to_user(
                         uid,
-                        f"Привет! Пора определиться, пойдешь играть? *{g_date} {g_name}*\n{get_game_rules(g_name, g_date).strip()}",
-                        reply_markup=vk_thinking_reminder_actions_keyboard(game_id)
+                        reminder_game_text(g_name, g_date),
+                        reply_markup=vk_reminder_actions_keyboard(game_id, False),
                     )
-                count += 1
-                continue
 
-            # Если пользователь отказался — не шлём повторно
-            if row and row[0] == "declined":
-                continue
-
-            builder = InlineKeyboardBuilder()
-
-            if row and row[0] == "registered":
-                builder.button(
-                    text="❌Отменить запись",
-                    callback_data=f"cancelreg_{game_id}"
-                )
-                builder.button(text="⏰Опоздаю", callback_data=f"late_{game_id}")
+            closing_text = "Записывайся на игры!\nБудем тебя ждать!😊"
+            if platform == PLATFORM_TELEGRAM:
+                await bot.send_message(get_platform_user_id(uid), closing_text)
             else:
-                builder.button(text="📝Записаться", callback_data=f"reg_{game_id}")
-                builder.button(text="🤔Думаю", callback_data=f"think_{game_id}")
-                builder.button(text="❌Не приду", callback_data=f"decline_{game_id}")
-                builder.adjust(2)
-
-            if detect_platform_by_user_id(uid) == PLATFORM_TELEGRAM:
-                await bot.send_message(
-                    get_platform_user_id(uid),
-                    f"🔔Напоминание об игре: {g_date} {g_name}\n{get_game_rules(g_name, g_date).strip()}\nБудем вас ждать!😊",
-                    reply_markup=builder.as_markup()
-                )
-            else:
-                await send_text_to_user(
-                    uid,
-                    f"🔔Напоминание об игре: {g_date} {g_name}\n{get_game_rules(g_name, g_date).strip()}\nБудем вас ждать!😊",
-                    reply_markup=vk_reminder_actions_keyboard(game_id, bool(row and row[0] == "registered"))
-                )
-
+                await send_text_to_user(uid, closing_text)
             count += 1
-
         except Exception as e:
             logging.error(f"Не удалось отправить напоминание {uid}: {e}")
 
@@ -2694,6 +2689,52 @@ def vk_games_keyboard(games, back_label: str = "🔙Назад"):
     if back_label:
         keyboard.add_line()
         keyboard.add_button(back_label, color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
+    return keyboard.get_keyboard()
+
+
+def telegram_reminder_games_keyboard(games, selected_ids):
+    selected = set(selected_ids)
+    builder = InlineKeyboardBuilder()
+    for game_id, game_name, game_date in games:
+        mark = "✅ " if game_id in selected else ""
+        builder.button(
+            text=f"{mark}{game_date} {game_name}",
+            callback_data=f"remgame_{game_id}",
+        )
+    builder.button(text="✅Готово", callback_data="remgame_done")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def admin_reminder_audience_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="👥Всем пользователям")
+    builder.button(text="✅Только записавшимся")
+    builder.button(text="❌Только не записавшимся")
+    builder.button(text="🤔Думающим игрокам")
+    builder.button(text="👤Выбор пользователей")
+    builder.button(text="🔙Назад")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def vk_reminder_games_keyboard(games, selected_ids):
+    selected = set(selected_ids)
+    keyboard = VkKeyboard(one_time=True)
+    for index, (game_id, game_name, game_date) in enumerate(games):
+        if index > 0 and index % 2 == 0:
+            keyboard.add_line()
+        mark = "✅ " if game_id in selected else ""
+        keyboard.add_button(
+            f"{mark}{game_date} {game_name}",
+            color=VkKeyboardColor.SECONDARY,
+            payload={"command": "rem_game_toggle", "game_id": game_id},
+        )
+    if games:
+        keyboard.add_line()
+    keyboard.add_button("✅Готово", color=VkKeyboardColor.POSITIVE, payload={"command": "rem_games_done"})
+    keyboard.add_line()
+    keyboard.add_button("🔙Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
     return keyboard.get_keyboard()
 
 
@@ -3285,9 +3326,10 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             )
         elif current == "admin_reminder_audience":
             games = fetch_upcoming_games()
-            send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?", use_game_buttons=True)
+            set_vk_state(internal_user_id, "admin_reminder_game", reminder_games=games, reminder_game_ids=[])
+            send_vk_message(vk_user_id, "Выбери одну или несколько игр:", vk_reminder_games_keyboard(games, []))
         elif current == "admin_reminder_custom_users":
-            set_vk_state(internal_user_id, "admin_reminder_audience", reminder_game_id=state.get("reminder_game_id"))
+            set_vk_state(internal_user_id, "admin_reminder_audience", reminder_game_ids=state.get("reminder_game_ids", []))
             send_vk_message(vk_user_id, "Кому отправить напоминание?", vk_audience_keyboard(include_thinking=True))
         elif current == "admin_club_members":
             clear_vk_state(internal_user_id)
@@ -3381,39 +3423,53 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         return True
 
     if current == "admin_reminder_game":
-        selected_game = get_vk_selected_game(state, normalized_text, payload)
-        if not selected_game:
-            send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
+        games = state.get("reminder_games", [])
+        selected = set(state.get("reminder_game_ids", []))
+        if command == "rem_game_toggle":
+            game_id = payload.get("game_id")
+            if not isinstance(game_id, int):
+                send_vk_message(vk_user_id, "Не удалось определить игру.")
+                return True
+            if game_id in selected:
+                selected.remove(game_id)
+            else:
+                selected.add(game_id)
+            set_vk_state(internal_user_id, "admin_reminder_game", reminder_games=games, reminder_game_ids=list(selected))
+            send_vk_message(vk_user_id, "Выбери одну или несколько игр:", vk_reminder_games_keyboard(games, selected))
             return True
-        game_id, game_name, game_date = selected_game
+        if command != "rem_games_done":
+            send_vk_message(vk_user_id, "Выбери игры кнопками ниже.", vk_reminder_games_keyboard(games, selected))
+            return True
+        if not selected:
+            send_vk_message(vk_user_id, "Выбери хотя бы одну игру.", vk_reminder_games_keyboard(games, selected))
+            return True
         set_vk_state(
             internal_user_id,
             "admin_reminder_audience",
-            reminder_game_id=game_id,
-            reminder_game_text=f"{game_date} {game_name}"
+            reminder_game_ids=list(selected),
         )
         send_vk_message(vk_user_id, "Кому отправить напоминание?", vk_audience_keyboard(include_thinking=True))
         return True
 
     if current == "admin_reminder_audience":
-        game_id = state.get("reminder_game_id")
+        game_ids = state.get("reminder_game_ids", [])
         if normalized_text == "👥 Всем пользователям" or audience == "all":
             rows = execute_query("SELECT user_id FROM users", fetch=True)
             target_users = [r[0] for r in rows]
         elif normalized_text == "✅Только записавшимся" or audience == "registered":
-            rows = execute_query("SELECT user_id FROM registrations WHERE game_id = %s", (game_id,), fetch=True)
+            rows = execute_query("SELECT DISTINCT user_id FROM registrations WHERE game_id = ANY(%s) AND status = 'registered'", (game_ids,), fetch=True)
             target_users = [r[0] for r in rows]
         elif normalized_text == "❌Только не записавшимся" or audience == "not_registered":
-            rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = %s)", (game_id,), fetch=True)
+            rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = ANY(%s) AND status = 'registered')", (game_ids,), fetch=True)
             target_users = [r[0] for r in rows]
         elif normalized_text == "🤔Думающим игрокам" or audience == "thinking":
-            rows = execute_query("SELECT user_id FROM thinking_players WHERE game_id = %s", (game_id,), fetch=True)
+            rows = execute_query("SELECT DISTINCT user_id FROM thinking_players WHERE game_id = ANY(%s)", (game_ids,), fetch=True)
             target_users = [r[0] for r in rows]
             if not target_users:
                 clear_vk_state(internal_user_id)
                 send_vk_message(vk_user_id, "Нет думающих игроков для этой игры.", vk_admin_menu_keyboard())
                 return True
-            count = await send_game_reminders(target_users, game_id, thinking_decision=True)
+            count = await send_game_reminders(target_users, game_ids)
             clear_vk_state(internal_user_id)
             send_vk_message(vk_user_id, f"Напоминания отправлены {count} думающим игрокам.", vk_admin_menu_keyboard())
             return True
@@ -3422,7 +3478,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             set_vk_state(
                 internal_user_id,
                 "admin_reminder_custom_users",
-                reminder_game_id=game_id,
+                reminder_game_ids=game_ids,
                 selectable_users=users,
                 selected_user_ids=[],
                 selected_user_page=0
@@ -3437,7 +3493,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             send_vk_message(vk_user_id, "Выбери аудиторию кнопкой ниже.", vk_audience_keyboard(include_thinking=(current == "admin_reminder_audience")))
             return True
 
-        count = await send_game_reminders(target_users, game_id)
+        count = await send_game_reminders(target_users, game_ids)
         clear_vk_state(internal_user_id)
         send_vk_message(vk_user_id, f"Напоминания отправлены {count} пользователям.", vk_admin_menu_keyboard())
         return True
@@ -3455,7 +3511,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             set_vk_state(
                 internal_user_id,
                 "admin_reminder_custom_users",
-                reminder_game_id=state.get("reminder_game_id"),
+                reminder_game_ids=state.get("reminder_game_ids", []),
                 selectable_users=users,
                 selected_user_ids=list(selected),
                 selected_user_page=requested_page
@@ -3480,7 +3536,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             set_vk_state(
                 internal_user_id,
                 "admin_reminder_custom_users",
-                reminder_game_id=state.get("reminder_game_id"),
+                reminder_game_ids=state.get("reminder_game_ids", []),
                 selectable_users=users,
                 selected_user_ids=list(selected),
                 selected_user_page=page
@@ -3504,7 +3560,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             send_vk_message(vk_user_id, "Никто не выбран. Выбери хотя бы одного пользователя.")
             return True
 
-        count = await send_game_reminders(list(selected), state.get("reminder_game_id"))
+        count = await send_game_reminders(list(selected), state.get("reminder_game_ids", []))
         clear_vk_state(internal_user_id)
         send_vk_message(vk_user_id, f"Напоминания отправлены {count} выбранным пользователям.", vk_admin_menu_keyboard())
         return True
@@ -3911,7 +3967,11 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "🔔Напомнить об игре" or command == "admin_reminder"):
         games = fetch_upcoming_games()
-        send_vk_games_list(vk_user_id, games, "admin_reminder_game", "Для какой игры отправить напоминание?", use_game_buttons=True)
+        if not games:
+            send_vk_message(vk_user_id, "Список игр пуст.", vk_admin_menu_keyboard())
+            return
+        set_vk_state(internal_user_id, "admin_reminder_game", reminder_games=games, reminder_game_ids=[])
+        send_vk_message(vk_user_id, "Выбери одну или несколько игр:", vk_reminder_games_keyboard(games, []))
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "📢Рассылка" or command == "admin_broadcast"):
