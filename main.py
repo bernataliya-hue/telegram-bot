@@ -8,6 +8,7 @@ import time
 import uuid
 import calendar
 import database
+from announcement_formatting import format_announcement
 from reminder_formatting import format_reminder_game_date
 
 from aiogram import Bot, Dispatcher, types, F
@@ -810,19 +811,9 @@ def get_announcement_cost_info(game_name: str) -> str:
     return "Стоимость игр 600 руб. с человека. По абонементу - бесплатно."
 
 
-def build_admin_announcement_text(game_date: str, game_name: str) -> str:
-    return (
-        "Всем привет!\n"
-        "На этой неделе играем в городскую мафию.\n\n"
-        f"{game_date} {game_name}\n"
-        f"{get_game_rules(game_name, game_date)}"
-        f"💵{get_announcement_cost_info(game_name)} 💵\n\n"
-        "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
-        "🎁 Если вы пришли вдвоем - платите одним переводом 1 000 руб. \n"
-        "❗️Скидки и акции не суммируются❗️\n\n"
-        "Запись через бота: @mafiya_TK_bot 🤖\n\n"
-        "P.S. Если на улице мокро, поэтому возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏"
-    )
+def build_admin_announcement_text(games) -> str:
+    """Build an announcement for all games selected by an administrator."""
+    return format_announcement(games, get_game_rules, get_announcement_cost_info)
 
 
 def build_registration_success_text(game_date: str, game_name: str) -> str:
@@ -1190,12 +1181,11 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         if not games:
             await message.answer("Список игр пуст.")
             return
-        builder = ReplyKeyboardBuilder()
-        for _, name, date in games:
-            builder.button(text=f"{date} {name}")
-        builder.button(text="🔙Назад")
-        builder.adjust(1)
-        await message.answer("Выберите игру для анонса:", reply_markup=builder.as_markup(resize_keyboard=True))
+        await state.update_data(announcement_games=games, announcement_game_ids=[])
+        await message.answer(
+            "Выберите одну или несколько игр для анонса:",
+            reply_markup=telegram_announcement_games_keyboard(games, []),
+        )
         await state.set_state(Form.admin_get_announcement)
     elif message.text == "📢Рассылка":
         builder = ReplyKeyboardBuilder()
@@ -2264,18 +2254,47 @@ async def admin_get_announcement_handler(message: types.Message, state: FSMConte
         await state.set_state(Form.admin_menu)
         return
 
-    result = execute_query(
-        "SELECT game_name, game_date FROM games WHERE game_date || ' ' || game_name = %s AND is_deleted = FALSE",
-        (message.text,),
-        fetchone=True
-    )
-    if not result:
-        await message.answer("Игра не найдена. Попробуйте выбрать игру из списка еще раз.")
+    await message.answer("Выберите игры кнопками под сообщением.")
+
+
+@dp.callback_query(Form.admin_get_announcement, F.data.startswith("announcement_game_"))
+async def admin_announcement_games_handler(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    games = data.get("announcement_games", [])
+    selected = set(data.get("announcement_game_ids", []))
+    action = callback.data.replace("announcement_game_", "", 1)
+
+    if action == "back":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        await callback.answer()
         return
 
-    game_name, game_date = result
-    await message.answer(build_admin_announcement_text(game_date, game_name), reply_markup=admin_menu_keyboard())
-    await state.set_state(Form.admin_menu)
+    if action == "done":
+        if not selected:
+            await callback.answer("Выберите хотя бы одну игру.", show_alert=True)
+            return
+        selected_games = [game for game in games if game[0] in selected]
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            build_admin_announcement_text(selected_games),
+            reply_markup=admin_menu_keyboard(),
+        )
+        await state.set_state(Form.admin_menu)
+        await callback.answer()
+        return
+
+    game_id = int(action)
+    if game_id in selected:
+        selected.remove(game_id)
+    else:
+        selected.add(game_id)
+    await state.update_data(announcement_game_ids=list(selected))
+    await callback.message.edit_reply_markup(
+        reply_markup=telegram_announcement_games_keyboard(games, selected)
+    )
+    await callback.answer()
 
 @dp.message(Form.admin_reminder_audience)
 async def admin_reminder_audience_handler(message: types.Message, state: FSMContext):
@@ -2713,6 +2732,21 @@ def telegram_reminder_games_keyboard(games, selected_ids):
             callback_data=f"remgame_{game_id}",
         )
     builder.button(text="✅Готово", callback_data="remgame_done")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def telegram_announcement_games_keyboard(games, selected_ids):
+    selected = set(selected_ids)
+    builder = InlineKeyboardBuilder()
+    for game_id, game_name, game_date in games:
+        mark = "✅ " if game_id in selected else ""
+        builder.button(
+            text=f"{mark}{game_date} {game_name}",
+            callback_data=f"announcement_game_{game_id}",
+        )
+    builder.button(text="✅Готово", callback_data="announcement_game_done")
+    builder.button(text="🔙Назад", callback_data="announcement_game_back")
     builder.adjust(1)
     return builder.as_markup()
 
