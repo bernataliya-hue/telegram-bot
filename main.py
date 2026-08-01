@@ -10,6 +10,7 @@ import calendar
 import database
 from announcement_formatting import format_announcement
 from reminder_formatting import format_reminder_game_date
+from player_of_month import clamp_page, decorate_player_of_month
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -50,6 +51,7 @@ VK_MAX_BUTTONS_ON_LINE = 5
 VK_MAX_LINES = 10
 VK_REMINDER_USERS_PAGE_SIZE = 8
 CLUB_MEMBERS_PAGE_SIZE = 10
+PLAYER_OF_MONTH_PAGE_SIZE = 10
 VK_LONGPOLL_RECONNECT_DELAY_SECONDS = 5
 ADMIN_PARTICIPANTS_FORMAT_NAME = "name_only"
 ADMIN_PARTICIPANTS_FORMAT_NAME_NICK = "name_nick"
@@ -188,6 +190,47 @@ def fetch_club_members():
         """,
         fetch=True,
     )
+
+
+def get_player_of_month_id():
+    row = execute_query("SELECT value FROM settings WHERE key = 'player_of_month'", fetchone=True)
+    if not row or not row[0]:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        logging.warning("Некорректный player_of_month в settings: %r", row[0])
+        return None
+
+
+def set_player_of_month(user_id: int):
+    execute_query(
+        """
+        INSERT INTO settings (key, value) VALUES ('player_of_month', %s)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """,
+        (str(user_id),),
+    )
+
+
+def player_of_month_page_title(users, page: int) -> str:
+    current_page, total_pages = clamp_page(len(users), page, PLAYER_OF_MONTH_PAGE_SIZE)
+    return f"Выберите игрока месяца (страница {current_page + 1}/{total_pages}):"
+
+
+def telegram_player_of_month_keyboard(users, page: int):
+    current_page, total_pages = clamp_page(len(users), page, PLAYER_OF_MONTH_PAGE_SIZE)
+    start = current_page * PLAYER_OF_MONTH_PAGE_SIZE
+    builder = InlineKeyboardBuilder()
+    for user in users[start:start + PLAYER_OF_MONTH_PAGE_SIZE]:
+        builder.button(text=club_member_nick(user), callback_data=f"player_month_select_{user[0]}")
+    if current_page > 0:
+        builder.button(text="⬅️", callback_data=f"player_month_page_{current_page - 1}")
+    if current_page + 1 < total_pages:
+        builder.button(text="➡️", callback_data=f"player_month_page_{current_page + 1}")
+    builder.button(text="🔙 Назад", callback_data="player_month_back")
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 def format_club_member_info(user_row) -> str:
@@ -370,6 +413,7 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
     )
     thinking_users = set(await get_thinking(game_id))
     late_users = set(await get_late_players(game_id))
+    player_of_month_id = get_player_of_month_id()
 
     if not participants and not thinking_users:
         return f"На игру {title} пока никто не записался."
@@ -383,6 +427,7 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
     for uid, nick in regular_participants + late_participants:
         mark = " (думает)" if uid in thinking_users else ""
         late_mark = " (опоздает)" if uid in late_users else ""
+        nick = decorate_player_of_month(nick, uid, player_of_month_id)
         response += f"{idx}. {nick}{mark}{late_mark}\n"
         idx += 1
 
@@ -390,7 +435,8 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
         if uid not in participant_ids:
             ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
             if ud:
-                response += f"- {ud[0]} (думает)\n"
+                nick = decorate_player_of_month(ud[0], uid, player_of_month_id)
+                response += f"- {nick} (думает)\n"
     return response.strip()
 
 
@@ -425,6 +471,7 @@ async def format_admin_participants_with_format(game_id: int, title: str, partic
     )
     thinking_users = set(await get_thinking(game_id))
     late_users = set(await get_late_players(game_id))
+    player_of_month_id = get_player_of_month_id()
 
     if not participants and not thinking_users:
         return f"На игру {title} пока никто не записался."
@@ -445,6 +492,7 @@ async def format_admin_participants_with_format(game_id: int, title: str, partic
             vk_username,
             participants_format,
         )
+        participant_view = decorate_player_of_month(participant_view, user_id, player_of_month_id)
         response += f"{idx}. {participant_view}{mark}{late_mark}\n"
 
     participant_ids = {user_id for user_id, *_ in participants}
@@ -459,6 +507,7 @@ async def format_admin_participants_with_format(game_id: int, title: str, partic
                 participant_view = build_admin_participant_display(
                     ud[0], ud[1], ud[2], ud[5], ud[6], ud[3], ud[4], participants_format
                 )
+                participant_view = decorate_player_of_month(participant_view, uid, player_of_month_id)
                 response += f"- {participant_view} (думает)\n"
     return response.strip()
 
@@ -504,6 +553,7 @@ class Form(StatesGroup):
     admin_manual_register_nick = State()
     admin_manual_register_action = State()
     admin_club_members = State()
+    admin_player_of_month = State()
 
 # Главное меню
 def main_menu_keyboard(user_id):
@@ -530,6 +580,7 @@ def admin_menu_keyboard():
     builder.button(text="📢Рассылка")
     builder.button(text="👥Список участников")
     builder.button(text="👥Члены клуба")
+    builder.button(text="👑Игрок месяца")
     builder.button(text="✍️Ручная запись игрока")
     builder.button(text="🏠Главное меню")
     builder.adjust(2)
@@ -1138,6 +1189,17 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
             reply_markup=telegram_club_members_keyboard(users, 0),
         )
         await state.set_state(Form.admin_club_members)
+    elif message.text == "👑Игрок месяца":
+        users = fetch_club_members()
+        if not users:
+            await message.answer("В боте пока нет зарегистрированных игроков.", reply_markup=admin_menu_keyboard())
+            return
+        await state.update_data(player_of_month_users=users, player_of_month_page=0)
+        await message.answer(
+            player_of_month_page_title(users, 0),
+            reply_markup=telegram_player_of_month_keyboard(users, 0),
+        )
+        await state.set_state(Form.admin_player_of_month)
     elif message.text == "✍️Ручная запись игрока":
         games = sort_games_by_date(filter_upcoming_games(execute_query(
             "SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE",
@@ -1393,6 +1455,50 @@ async def admin_club_member_info_handler(callback: types.CallbackQuery, state: F
         return
     await callback.message.answer(format_club_member_info(user), reply_markup=admin_menu_keyboard())
     await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
+    await state.set_state(Form.admin_menu)
+
+
+@dp.callback_query(Form.admin_player_of_month, F.data.startswith("player_month_page_"))
+async def admin_player_of_month_page_handler(callback: types.CallbackQuery, state: FSMContext):
+    requested_page = int(callback.data.replace("player_month_page_", "", 1))
+    state_data = await state.get_data()
+    users = state_data.get("player_of_month_users") or fetch_club_members()
+    current_page, _ = clamp_page(len(users), requested_page, PLAYER_OF_MONTH_PAGE_SIZE)
+    await state.update_data(player_of_month_users=users, player_of_month_page=current_page)
+    await callback.message.edit_text(
+        player_of_month_page_title(users, current_page),
+        reply_markup=telegram_player_of_month_keyboard(users, current_page),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(Form.admin_player_of_month, F.data.startswith("player_month_select_"))
+async def admin_player_of_month_select_handler(callback: types.CallbackQuery, state: FSMContext):
+    user_id = int(callback.data.replace("player_month_select_", "", 1))
+    user = execute_query(
+        "SELECT first_name, last_name, mafia_nick FROM users WHERE user_id = %s",
+        (user_id,),
+        fetchone=True,
+    )
+    if not user:
+        await callback.answer("Игрок не найден.", show_alert=True)
+        return
+    set_player_of_month(user_id)
+    display_name = user[2] or f"{user[0] or ''} {user[1] or ''}".strip() or f"ID {user_id}"
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        f"👑 Игроком месяца назначен {display_name}.",
+        reply_markup=admin_menu_keyboard(),
+    )
+    await callback.answer("Игрок месяца назначен")
+    await state.set_state(Form.admin_menu)
+
+
+@dp.callback_query(Form.admin_player_of_month, F.data == "player_month_back")
+async def admin_player_of_month_back_handler(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("Вы вернулись в админ-меню.", reply_markup=admin_menu_keyboard())
     await callback.answer()
     await state.set_state(Form.admin_menu)
 
@@ -1720,6 +1826,7 @@ async def callback_participants(callback: types.CallbackQuery, state: FSMContext
     thinking_users = await get_thinking(game_id)
     thinking_users = set(map(int, thinking_users))
     late_users = await get_late_players(game_id)
+    player_of_month_id = get_player_of_month_id()
 
     title = f"📅{game_date} {game_name}"
     if not participants and not thinking_users:
@@ -1734,6 +1841,7 @@ async def callback_participants(callback: types.CallbackQuery, state: FSMContext
         for uid, nick in regular_participants + late_participants:
             mark = " (думает)" if uid in thinking_users else ""
             late_mark = " (опоздает)" if uid in late_users else ""
+            nick = decorate_player_of_month(nick, uid, player_of_month_id)
             response += f"{idx}. {nick}{mark}{late_mark}\n"
             idx += 1
 
@@ -1741,7 +1849,8 @@ async def callback_participants(callback: types.CallbackQuery, state: FSMContext
             if uid not in participant_ids:
                 ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
                 if ud:
-                    response += f"- {ud[0]} (думает)\n"
+                    nick = decorate_player_of_month(ud[0], uid, player_of_month_id)
+                    response += f"- {nick} (думает)\n"
 
         await callback.message.answer(response, reply_markup=main_menu_keyboard(callback.from_user.id))
 
@@ -1810,6 +1919,7 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
         thinking_users = await get_thinking(game_id)
         thinking_users = set(map(int, thinking_users))
         late_users = await get_late_players(game_id)
+        player_of_month_id = get_player_of_month_id()
 
         if not participants and not thinking_users:
             await message.answer(f"На игру {message.text} пока никто не записался.", reply_markup=main_menu_keyboard(message.from_user.id))
@@ -1822,6 +1932,7 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
             for uid, nick in regular_participants + late_participants:
                 mark = " (думает)" if uid in thinking_users else ""
                 late_mark = " (опоздает)" if uid in late_users else ""
+                nick = decorate_player_of_month(nick, uid, player_of_month_id)
                 response += f"{idx}. {nick}{mark}{late_mark}\n"
                 idx += 1
 
@@ -1830,7 +1941,8 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
                 if uid not in participant_ids:
                     ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
                     if ud:
-                        response += f"- {ud[0]} (думает)\n"
+                        nick = decorate_player_of_month(ud[0], uid, player_of_month_id)
+                        response += f"- {nick} (думает)\n"
 
             await message.answer(response, reply_markup=main_menu_keyboard(message.from_user.id))
     else:

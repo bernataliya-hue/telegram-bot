@@ -90,6 +90,7 @@ def init_db():
     )
     """)
     cursor.execute("INSERT INTO settings (key, value) VALUES ('schedule', 'Расписание пока не установлено') ON CONFLICT (key) DO NOTHING")
+    cursor.execute("INSERT INTO settings (key, value) VALUES ('player_of_month', '') ON CONFLICT (key) DO NOTHING")
     
     conn.commit()
     cursor.close()
