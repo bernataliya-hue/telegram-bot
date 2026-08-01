@@ -47,6 +47,7 @@ PLATFORM_VK = "vk"
 VK_MAX_BUTTONS_ON_LINE = 5
 VK_MAX_LINES = 10
 VK_REMINDER_USERS_PAGE_SIZE = 8
+CLUB_MEMBERS_PAGE_SIZE = 10
 VK_LONGPOLL_RECONNECT_DELAY_SECONDS = 5
 ADMIN_PARTICIPANTS_FORMAT_NAME = "name_only"
 ADMIN_PARTICIPANTS_FORMAT_NAME_NICK = "name_nick"
@@ -173,6 +174,37 @@ def build_profile_link(platform: str, platform_user_id: int, telegram_username: 
     if vk_username:
         return f"https://vk.com/{vk_username}"
     return f"https://vk.com/id{platform_user_id}"
+
+
+def fetch_club_members():
+    return execute_query(
+        """
+        SELECT user_id, platform, platform_user_id, first_name, last_name, mafia_nick,
+               age, telegram_username, vk_username
+        FROM users
+        ORDER BY mafia_nick NULLS LAST, first_name NULLS LAST, last_name NULLS LAST, user_id
+        """,
+        fetch=True,
+    )
+
+
+def format_club_member_info(user_row) -> str:
+    user_id, platform, platform_user_id, first_name, last_name, mafia_nick, age, tg_username, vk_username = user_row
+    resolved_platform = platform or detect_platform_by_user_id(user_id)
+    resolved_platform_user_id = platform_user_id or get_platform_user_id(user_id)
+    profile_link = build_profile_link(resolved_platform, resolved_platform_user_id, tg_username, vk_username)
+    return (
+        "👤 Информация об участнике клуба:\n"
+        f"Имя: {first_name or 'не указано'}\n"
+        f"Фамилия: {last_name or 'не указана'}\n"
+        f"Ник: {mafia_nick or 'не указан'}\n"
+        f"Возраст: {age if age is not None else 'не указан'}\n"
+        f"Профиль: {profile_link}"
+    )
+
+
+def club_member_nick(user_row) -> str:
+    return (user_row[5] or f"ID {user_row[0]}").strip()
 
 
 def upsert_user(
@@ -469,6 +501,7 @@ class Form(StatesGroup):
     admin_manual_register_last_name = State()
     admin_manual_register_nick = State()
     admin_manual_register_action = State()
+    admin_club_members = State()
 
 # Главное меню
 def main_menu_keyboard(user_id):
@@ -494,6 +527,7 @@ def admin_menu_keyboard():
     builder.button(text="📣Получить анонс")
     builder.button(text="📢Рассылка")
     builder.button(text="👥Список участников")
+    builder.button(text="👥Члены клуба")
     builder.button(text="✍️Ручная запись игрока")
     builder.button(text="🏠Главное меню")
     builder.adjust(2)
@@ -525,6 +559,8 @@ def vk_admin_menu_keyboard():
     keyboard.add_button("🚫Отмена игры", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_cancel_game"})
     keyboard.add_line()
     keyboard.add_button("👥Список участников админ", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_view_participants"})
+    keyboard.add_line()
+    keyboard.add_button("👥Члены клуба", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_club_members"})
     keyboard.add_button("🔔Напомнить об игре", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_reminder"})
     keyboard.add_line()
     keyboard.add_button("📢Рассылка", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_broadcast"})
@@ -1078,6 +1114,18 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         builder.adjust(1)
         await message.answer("Выберите игру для просмотра списка участников:", reply_markup=builder.as_markup(resize_keyboard=True))
         await state.set_state(Form.view_participants)
+
+    elif message.text == "👥Члены клуба":
+        users = fetch_club_members()
+        if not users:
+            await message.answer("В боте пока нет зарегистрированных пользователей.", reply_markup=admin_menu_keyboard())
+            return
+        await state.update_data(club_members=users, club_members_page=0)
+        await message.answer(
+            club_members_page_title(users, 0),
+            reply_markup=telegram_club_members_keyboard(users, 0),
+        )
+        await state.set_state(Form.admin_club_members)
     elif message.text == "✍️Ручная запись игрока":
         games = sort_games_by_date(filter_upcoming_games(execute_query(
             "SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE",
@@ -1299,6 +1347,43 @@ async def admin_view_participants_format_handler(message: types.Message, state: 
 
     response = await format_admin_participants_with_format(game_id, game_title, selected_format)
     await message.answer(response, reply_markup=admin_menu_keyboard())
+    await state.set_state(Form.admin_menu)
+
+
+
+@dp.callback_query(Form.admin_club_members, F.data.startswith("club_members_page_"))
+async def admin_club_members_page_handler(callback: types.CallbackQuery, state: FSMContext):
+    requested_page = int(callback.data.replace("club_members_page_", "", 1))
+    state_data = await state.get_data()
+    users = state_data.get("club_members") or fetch_club_members()
+    current_page, _ = club_members_page_details(users, requested_page)
+    await state.update_data(club_members=users, club_members_page=current_page)
+    await callback.message.edit_text(
+        club_members_page_title(users, current_page),
+        reply_markup=telegram_club_members_keyboard(users, current_page),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(Form.admin_club_members, F.data.startswith("club_member_"))
+async def admin_club_member_info_handler(callback: types.CallbackQuery, state: FSMContext):
+    user_id = int(callback.data.replace("club_member_", "", 1))
+    user = execute_query(
+        """
+        SELECT user_id, platform, platform_user_id, first_name, last_name, mafia_nick,
+               age, telegram_username, vk_username
+        FROM users
+        WHERE user_id = %s
+        """,
+        (user_id,),
+        fetchone=True,
+    )
+    if not user:
+        await callback.answer("Пользователь не найден.", show_alert=True)
+        return
+    await callback.message.answer(format_club_member_info(user), reply_markup=admin_menu_keyboard())
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.answer()
     await state.set_state(Form.admin_menu)
 
 
@@ -2681,6 +2766,65 @@ def vk_reminder_user_selection_keyboard(users, selected_ids, page: int = 0, page
     return keyboard.get_keyboard()
 
 
+
+def club_members_page_details(users, page: int, page_size: int = CLUB_MEMBERS_PAGE_SIZE):
+    total_pages = max(1, (len(users) + page_size - 1) // page_size)
+    current_page = max(0, min(page, total_pages - 1))
+    return current_page, total_pages
+
+
+def club_members_page_title(users, page: int) -> str:
+    current_page, total_pages = club_members_page_details(users, page)
+    return f"Выберите участника клуба (страница {current_page + 1} из {total_pages}):"
+
+
+def telegram_club_members_keyboard(users, page: int = 0):
+    builder = InlineKeyboardBuilder()
+    current_page, total_pages = club_members_page_details(users, page)
+    start = current_page * CLUB_MEMBERS_PAGE_SIZE
+    for user in users[start:start + CLUB_MEMBERS_PAGE_SIZE]:
+        builder.button(text=club_member_nick(user), callback_data=f"club_member_{user[0]}")
+    builder.adjust(1)
+
+    navigation_buttons = []
+    if current_page > 0:
+        navigation_buttons.append(types.InlineKeyboardButton(text="◀️", callback_data=f"club_members_page_{current_page - 1}"))
+    if current_page < total_pages - 1:
+        navigation_buttons.append(types.InlineKeyboardButton(text="▶️", callback_data=f"club_members_page_{current_page + 1}"))
+    if navigation_buttons:
+        builder.row(*navigation_buttons)
+    return builder.as_markup()
+
+
+def vk_club_members_keyboard(users, page: int = 0, page_size: int = CLUB_MEMBERS_PAGE_SIZE):
+    keyboard = VkKeyboard(one_time=True)
+    current_page, total_pages = club_members_page_details(users, page, page_size)
+    start = current_page * page_size
+    users_on_page = users[start:start + page_size]
+
+    for index, user in enumerate(users_on_page):
+        if index > 0 and index % 2 == 0:
+            keyboard.add_line()
+        keyboard.add_button(
+            club_member_nick(user),
+            color=VkKeyboardColor.SECONDARY,
+            payload={"command": "club_member_select", "user_id": user[0], "page": current_page}
+        )
+
+    if total_pages > 1:
+        if users_on_page:
+            keyboard.add_line()
+        if current_page > 0:
+            keyboard.add_button("◀️", color=VkKeyboardColor.SECONDARY, payload={"command": "club_members_page", "page": current_page - 1})
+        if current_page < total_pages - 1:
+            keyboard.add_button("▶️", color=VkKeyboardColor.SECONDARY, payload={"command": "club_members_page", "page": current_page + 1})
+
+    if users_on_page or total_pages > 1:
+        keyboard.add_line()
+    keyboard.add_button("🔙Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
+    return keyboard.get_keyboard()
+
+
 def vk_game_type_keyboard():
     keyboard = VkKeyboard(one_time=True)
     keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.SECONDARY, payload={"game_type": "🏙️Городская мафия"})
@@ -3090,6 +3234,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         "admin_restore_game",
         "admin_cancel_game",
         "admin_view_participants",
+        "admin_club_members",
         "admin_reminder",
         "admin_broadcast",
         "main_menu",
@@ -3101,6 +3246,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         "♻️Восстановить игру",
         "🚫Отмена игры",
         "👥Список участников админ",
+        "👥Члены клуба",
         "🔔Напомнить об игре",
         "📢Рассылка",
         "🏠Главное меню",
@@ -3143,6 +3289,9 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         elif current == "admin_reminder_custom_users":
             set_vk_state(internal_user_id, "admin_reminder_audience", reminder_game_id=state.get("reminder_game_id"))
             send_vk_message(vk_user_id, "Кому отправить напоминание?", vk_audience_keyboard(include_thinking=True))
+        elif current == "admin_club_members":
+            clear_vk_state(internal_user_id)
+            send_vk_message(vk_user_id, "Возвращаюсь в админ-меню.", vk_admin_menu_keyboard())
         elif current in {"admin_broadcast_game", "admin_broadcast_custom_users", "admin_broadcast_message"}:
             set_vk_state(internal_user_id, "admin_broadcast_audience")
             send_vk_message(vk_user_id, "Кому отправить сообщение?", vk_audience_keyboard())
@@ -3191,6 +3340,44 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         execute_query("INSERT INTO games (game_date, game_name) VALUES (%s, %s)", (game_date, selected_type))
         clear_vk_state(internal_user_id)
         send_vk_message(vk_user_id, f"Игра '{game_date} {selected_type}' успешно добавлена.", vk_admin_menu_keyboard())
+        return True
+
+
+    if current == "admin_club_members":
+        users = state.get("club_members", [])
+        current_page = state.get("club_members_page", 0)
+
+        if command == "club_members_page":
+            requested_page = payload.get("page")
+            if not isinstance(requested_page, int):
+                send_vk_message(vk_user_id, "Не удалось переключить страницу. Попробуй ещё раз.")
+                return True
+            set_vk_state(internal_user_id, "admin_club_members", club_members=users, club_members_page=requested_page)
+            send_vk_message(vk_user_id, club_members_page_title(users, requested_page), vk_club_members_keyboard(users, page=requested_page))
+            return True
+
+        selected_user_id = payload.get("user_id")
+        if command == "club_member_select" and isinstance(selected_user_id, int):
+            user = next((item for item in users if int(item[0]) == selected_user_id), None)
+            if not user:
+                user = execute_query(
+                    """
+                    SELECT user_id, platform, platform_user_id, first_name, last_name, mafia_nick,
+                           age, telegram_username, vk_username
+                    FROM users
+                    WHERE user_id = %s
+                    """,
+                    (selected_user_id,),
+                    fetchone=True,
+                )
+            if not user:
+                send_vk_message(vk_user_id, "Пользователь не найден.", vk_club_members_keyboard(users, page=current_page))
+                return True
+            clear_vk_state(internal_user_id)
+            send_vk_message(vk_user_id, format_club_member_info(user), vk_admin_menu_keyboard())
+            return True
+
+        send_vk_message(vk_user_id, "Выберите участника клуба кнопкой ниже.", vk_club_members_keyboard(users, page=current_page))
         return True
 
     if current == "admin_reminder_game":
@@ -3710,6 +3897,16 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "👥Список участников админ" or command == "admin_view_participants"):
         games = fetch_active_games()
         send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?", use_game_buttons=True)
+        return
+
+
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "👥Члены клуба" or command == "admin_club_members"):
+        users = fetch_club_members()
+        if not users:
+            send_vk_message(vk_user_id, "В боте пока нет зарегистрированных пользователей.", vk_admin_menu_keyboard())
+            return
+        set_vk_state(internal_user_id, "admin_club_members", club_members=users, club_members_page=0)
+        send_vk_message(vk_user_id, club_members_page_title(users, 0), vk_club_members_keyboard(users, page=0))
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "🔔Напомнить об игре" or command == "admin_reminder"):
