@@ -17,8 +17,8 @@ class AnnouncementFormattingTests(unittest.TestCase):
         )
 
         self.assertIn("Всем привет! 👋\nНа следующей неделе играем мафию!", announcement)
-        self.assertIn("Вс 02.08 Городская мафия 🏙", announcement)
-        self.assertIn("Пн 03.08 Спортивная мафия 🏆", announcement)
+        self.assertIn("📅 Вс 02.08 Городская мафия 🏙", announcement)
+        self.assertIn("📅 Пн 03.08 Спортивная мафия 🏆", announcement)
         self.assertEqual(announcement.count("Стоимость игр 600 руб."), 1)
         self.assertIn("- в ТГ: https://t.me/mafiya_TK_bot", announcement)
         self.assertIn("- в ВК: https://vk.ru/club236985675", announcement)

@@ -7,7 +7,7 @@ def format_announcement(games, game_rules, cost_info) -> str:
     cost_lines = []
     for _, game_name, game_date in games:
         game_blocks.append(
-            f"{format_reminder_game_date(game_date)} {game_name}\n"
+            f"📅 {format_reminder_game_date(game_date)} {game_name}\n"
             f"{game_rules(game_name, game_date).strip()}"
         )
         game_cost = cost_info(game_name)
