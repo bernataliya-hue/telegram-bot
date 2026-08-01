@@ -8,6 +8,7 @@ import time
 import uuid
 import calendar
 import database
+from reminder_formatting import format_reminder_game_date
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -672,7 +673,13 @@ def reminder_actions_keyboard(game_id: int):
 
 
 def reminder_game_text(game_name: str, game_date: str) -> str:
-    return f"{game_date} {game_name}\n{get_game_rules(game_name, game_date).strip()}"
+    """Build the game block used in a reminder.
+
+    Older games can have a date without the weekday (or an ISO date), while new
+    games store the already formatted value.  Reminders should look identical
+    for both kinds of records, so the weekday is restored when possible.
+    """
+    return f"{format_reminder_game_date(game_date)} {game_name}\n{get_game_rules(game_name, game_date).strip()}"
 
 def parse_game_date(game_date: str):
     if not game_date:
@@ -692,6 +699,7 @@ def parse_game_date(game_date: str):
         except ValueError:
             continue
     return None
+
 
 def is_upcoming_game(game_date: str) -> bool:
     parsed = parse_game_date(game_date)
@@ -2392,7 +2400,10 @@ async def send_game_reminders(user_ids, game_ids):
     if not games:
         return 0
 
-    for uid in user_ids:
+    # A user can occur in more than one audience query (for example, when the
+    # caller combines selections).  Never send the same reminder twice.
+    unique_user_ids = list(dict.fromkeys(user_ids))
+    for uid in unique_user_ids:
         try:
             platform = detect_platform_by_user_id(uid)
             if platform == PLATFORM_TELEGRAM:
