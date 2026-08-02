@@ -22,6 +22,10 @@ class AnnouncementFormattingTests(unittest.TestCase):
         self.assertEqual(announcement.count("Стоимость игр 600 руб."), 1)
         self.assertIn("- в ТГ: https://t.me/mafiya_TK_bot", announcement)
         self.assertIn("- в ВК: https://vk.ru/club236985675", announcement)
+        self.assertIn(
+            "P.S. Если на улице мокро, возьмите, пожалуйста, с собой сменку или пользуйтесь тапочками ТК🙏",
+            announcement,
+        )
 
     def test_includes_each_distinct_price_for_mixed_games(self):
         games = [(1, "Городская", "02.08.2026"), (2, "Рейтинговая", "03.08.2026")]
