@@ -8,7 +8,12 @@ import time
 import uuid
 import calendar
 import database
-from game_editing import GAME_TYPES, format_schedule_change, normalize_game_time
+from game_editing import (
+    GAME_TYPES,
+    format_schedule_change,
+    normalize_game_time,
+    schedule_change_recipients,
+)
 from announcement_formatting import format_announcement
 from reminder_formatting import format_reminder_game_date
 from player_of_month import clamp_page, decorate_player_of_month
@@ -709,6 +714,18 @@ async def get_late_players(game_id: int):
 def late_button_keyboard(game_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="⏰Опоздаю", callback_data=f"late_{game_id}")
+    return builder.as_markup()
+
+
+def schedule_change_keyboard(game_id: int, is_registered: bool):
+    builder = InlineKeyboardBuilder()
+    if is_registered:
+        builder.button(text="❌Отменить запись", callback_data=f"cancelreg_{game_id}")
+        builder.button(text="⏰Опоздаю", callback_data=f"late_{game_id}")
+    else:
+        builder.button(text="📝Записаться", callback_data=f"reg_{game_id}")
+        builder.button(text="❌Не приду", callback_data=f"decline_{game_id}")
+    builder.adjust(2)
     return builder.as_markup()
 
 
@@ -1443,17 +1460,34 @@ async def admin_edit_start_time_handler(message: types.Message, state: FSMContex
         "SELECT user_id FROM registrations WHERE game_id=%s AND status='registered'",
         (data["edit_game_id"],), fetch=True,
     )
+    thinking_players = execute_query(
+        "SELECT user_id FROM thinking_players WHERE game_id=%s",
+        (data["edit_game_id"],), fetch=True,
+    )
+    recipients = schedule_change_recipients(
+        (user_id for (user_id,) in participants),
+        (user_id for (user_id,) in thinking_players),
+    )
     notification = format_schedule_change(data["game_date"], data["new_game_name"],
                                           data["new_gathering_time"], start_time, changed)
     sent = 0
     if changed:
-        for (user_id,) in participants:
+        for user_id, is_registered in recipients:
             try:
-                await send_text_to_user(user_id, notification, parse_mode="HTML")
+                if detect_platform_by_user_id(user_id) == PLATFORM_TELEGRAM:
+                    keyboard = schedule_change_keyboard(data["edit_game_id"], is_registered)
+                else:
+                    keyboard = vk_schedule_change_keyboard(data["edit_game_id"], is_registered)
+                await send_text_to_user(
+                    user_id,
+                    notification,
+                    parse_mode="HTML",
+                    reply_markup=keyboard,
+                )
                 sent += 1
             except Exception as exc:
                 logging.error("Не удалось уведомить пользователя %s об изменении игры: %s", user_id, exc)
-    await message.answer(f"Игра изменена. Уведомлены участники: {sent}.", reply_markup=admin_menu_keyboard())
+    await message.answer(f"Игра изменена. Уведомлены игроки: {sent}.", reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
 
 @dp.message(Form.delete_game)
@@ -2383,6 +2417,10 @@ async def callback_decline(callback: types.CallbackQuery):
         ON CONFLICT (user_id, game_id)
         DO UPDATE SET status = 'declined'
     """, (user_id, game_id))
+    execute_query(
+        "DELETE FROM thinking_players WHERE user_id = %s AND game_id = %s",
+        (user_id, game_id),
+    )
     await unmark_late(user_id, game_id)
 
     await callback.answer("Спасибо за ответ!")
@@ -3023,6 +3061,19 @@ def vk_late_button_keyboard(game_id: int):
     keyboard.add_button("⏰Опоздаю", color=VkKeyboardColor.SECONDARY, payload={"command": "mark_late", "game_id": game_id})
     keyboard.add_line()
     keyboard.add_button("🏠В меню", color=VkKeyboardColor.SECONDARY, payload={"command": "main_menu"})
+    return keyboard.get_keyboard()
+
+
+def vk_schedule_change_keyboard(game_id: int, is_registered: bool):
+    keyboard = VkKeyboard(one_time=True)
+    if is_registered:
+        keyboard.add_button("❌Отменить запись", color=VkKeyboardColor.SECONDARY, payload={"command": "reminder_cancel", "game_id": game_id})
+        keyboard.add_line()
+        keyboard.add_button("⏰Опоздаю", color=VkKeyboardColor.SECONDARY, payload={"command": "reminder_late", "game_id": game_id})
+    else:
+        keyboard.add_button("📝Записаться", color=VkKeyboardColor.SECONDARY, payload={"command": "reminder_register", "game_id": game_id})
+        keyboard.add_line()
+        keyboard.add_button("❌Не приду", color=VkKeyboardColor.SECONDARY, payload={"command": "reminder_decline", "game_id": game_id})
     return keyboard.get_keyboard()
 
 
