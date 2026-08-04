@@ -1,6 +1,6 @@
 import unittest
 
-from game_editing import format_schedule_change, normalize_game_time
+from game_editing import format_schedule_change, normalize_game_time, schedule_change_recipients
 
 
 class GameEditingTests(unittest.TestCase):
@@ -22,6 +22,16 @@ class GameEditingTests(unittest.TestCase):
     def test_values_are_html_escaped(self):
         text = format_schedule_change("Пт 07.08", "<игра>", "18:00", "18:30", {"game_name"})
         self.assertIn("<b>&lt;игра&gt;</b>", text)
+
+    def test_schedule_change_includes_registered_and_thinking_players(self):
+        recipients = dict(schedule_change_recipients([10, 20], [30, 40]))
+
+        self.assertEqual(recipients, {10: True, 20: True, 30: False, 40: False})
+
+    def test_registered_status_wins_for_duplicate_recipient(self):
+        recipients = dict(schedule_change_recipients([10], [10]))
+
+        self.assertEqual(recipients, {10: True})
 
 
 if __name__ == "__main__":
