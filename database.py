@@ -51,10 +51,14 @@ def init_db():
         game_id SERIAL PRIMARY KEY,
         game_name TEXT,
         game_date TEXT,
+        gathering_time TEXT,
+        start_time TEXT,
         is_deleted BOOLEAN DEFAULT FALSE,
         UNIQUE(game_name, game_date)
     )
     """)
+    cursor.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS gathering_time TEXT")
+    cursor.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS start_time TEXT")
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS registrations (

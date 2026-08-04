@@ -8,6 +8,7 @@ import time
 import uuid
 import calendar
 import database
+from game_editing import GAME_TYPES, format_schedule_change, normalize_game_time
 from announcement_formatting import format_announcement
 from reminder_formatting import format_reminder_game_date
 from player_of_month import clamp_page, decorate_player_of_month
@@ -315,7 +316,7 @@ async def send_text_to_user(user_id: int, text: str, parse_mode: str = None, rep
     vk_api_client.messages.send(
         user_id=platform_user_id,
         random_id=uuid.uuid4().int & 0x7FFFFFFF,
-        message=text,
+        message=text.replace("<b>", "").replace("</b>", "") if parse_mode == "HTML" else text,
         keyboard=reply_markup
     )
 
@@ -529,6 +530,10 @@ class Form(StatesGroup):
     admin_menu = State()
     add_game_date = State()
     add_game_type = State()
+    admin_edit_game = State()
+    admin_edit_game_type = State()
+    admin_edit_gathering_time = State()
+    admin_edit_start_time = State()
     delete_game = State()
     view_participants = State()
     view_participants_format = State()
@@ -572,6 +577,7 @@ def main_menu_keyboard(user_id):
 def admin_menu_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="➕Добавить игру")
+    builder.button(text="✏️Изменить игру")
     builder.button(text="❌Удалить игру")
     builder.button(text="♻️Восстановить игру")
     builder.button(text="🚫Отмена игры")
@@ -828,6 +834,18 @@ def is_weekday_game(game_date: str) -> bool:
 
 
 def get_game_rules(game_name: str, game_date: str = None):
+    if game_date:
+        custom_times = execute_query(
+            """SELECT gathering_time, start_time FROM games
+               WHERE game_name = %s AND game_date = %s AND is_deleted = FALSE
+               LIMIT 1""",
+            (game_name, game_date), fetchone=True,
+        )
+        if custom_times and custom_times[0] and custom_times[1]:
+            return (
+                f"{custom_times[0]} – сбор и объяснение правил\n"
+                f"{custom_times[1]} – начало игр\n\n"
+            )
     if is_weekday_game(game_date):
         return WEEKDAY_GAME_RULES
 
@@ -1141,6 +1159,20 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
             "Например: 27.03 или 27.03.2026"
         )
         await state.set_state(Form.add_game_date)
+    elif message.text == "✏️Изменить игру":
+        games = sort_games_by_date(execute_query(
+            "SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True
+        ))
+        if not games:
+            await message.answer("Список активных игр пуст.")
+            return
+        builder = ReplyKeyboardBuilder()
+        for _, name, date in games:
+            builder.button(text=f"{date} {name}")
+        builder.button(text="🔙Назад")
+        builder.adjust(1)
+        await message.answer("Какую игру изменить?", reply_markup=builder.as_markup(resize_keyboard=True))
+        await state.set_state(Form.admin_edit_game)
     elif message.text == "❌Удалить игру":
         games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
         if not games:
@@ -1321,7 +1353,7 @@ async def process_add_game_date_text(message: types.Message, state: FSMContext):
 
 @dp.message(Form.add_game_type)
 async def process_add_game_type(message: types.Message, state: FSMContext):
-    if message.text not in ["🏙️Городская мафия", "🌃Спортивная мафия", "🏆Рейтинговая игра"]:
+    if message.text not in GAME_TYPES:
         await message.answer("Пожалуйста, выберите один из вариантов кнопками.")
         return
 
@@ -1331,6 +1363,97 @@ async def process_add_game_type(message: types.Message, state: FSMContext):
 
     execute_query("INSERT INTO games (game_date, game_name) VALUES (%s, %s)", (date, name))
     await message.answer(f"Игра '{date} {name}' успешно добавлена!", reply_markup=admin_menu_keyboard())
+    await state.set_state(Form.admin_menu)
+
+
+def default_game_times(game_name: str, game_date: str):
+    lines = [line.strip() for line in get_game_rules(game_name, game_date).splitlines() if line.strip()]
+    gathering = next((line.split(" ", 1)[0] for line in lines if "сбор" in line), "18:00")
+    start = next((line.split(" ", 1)[0] for line in lines if "начало" in line), "18:30")
+    return gathering, start
+
+
+@dp.message(Form.admin_edit_game)
+async def admin_edit_game_handler(message: types.Message, state: FSMContext):
+    if message.text == "🔙Назад":
+        await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        return
+    game = execute_query(
+        """SELECT game_id, game_name, game_date, gathering_time, start_time FROM games
+           WHERE game_date || ' ' || game_name = %s AND is_deleted = FALSE""",
+        (message.text,), fetchone=True,
+    )
+    if not game:
+        await message.answer("Игра не найдена.")
+        return
+    gathering, start = default_game_times(game[1], game[2])
+    await state.update_data(edit_game_id=game[0], old_game_name=game[1], game_date=game[2],
+                            old_gathering_time=game[3] or gathering, old_start_time=game[4] or start)
+    builder = ReplyKeyboardBuilder()
+    for game_type in GAME_TYPES:
+        builder.button(text=game_type)
+    builder.adjust(1)
+    await message.answer("Выберите вид игры:", reply_markup=builder.as_markup(resize_keyboard=True))
+    await state.set_state(Form.admin_edit_game_type)
+
+
+@dp.message(Form.admin_edit_game_type)
+async def admin_edit_game_type_handler(message: types.Message, state: FSMContext):
+    if message.text not in GAME_TYPES:
+        await message.answer("Пожалуйста, выберите вид игры кнопкой.")
+        return
+    await state.update_data(new_game_name=message.text)
+    data = await state.get_data()
+    await message.answer(f"Введите время сбора в формате ЧЧ:ММ (сейчас {data['old_gathering_time']}):")
+    await state.set_state(Form.admin_edit_gathering_time)
+
+
+@dp.message(Form.admin_edit_gathering_time)
+async def admin_edit_gathering_time_handler(message: types.Message, state: FSMContext):
+    value = normalize_game_time(message.text)
+    if not value:
+        await message.answer("Некорректное время. Введите его в формате ЧЧ:ММ, например 18:00.")
+        return
+    await state.update_data(new_gathering_time=value)
+    data = await state.get_data()
+    await message.answer(f"Введите время начала игры в формате ЧЧ:ММ (сейчас {data['old_start_time']}):")
+    await state.set_state(Form.admin_edit_start_time)
+
+
+@dp.message(Form.admin_edit_start_time)
+async def admin_edit_start_time_handler(message: types.Message, state: FSMContext):
+    start_time = normalize_game_time(message.text)
+    if not start_time:
+        await message.answer("Некорректное время. Введите его в формате ЧЧ:ММ, например 18:30.")
+        return
+    data = await state.get_data()
+    changed = {
+        field for field, old, new in (
+            ("game_name", data["old_game_name"], data["new_game_name"]),
+            ("gathering_time", data["old_gathering_time"], data["new_gathering_time"]),
+            ("start_time", data["old_start_time"], start_time),
+        ) if old != new
+    }
+    execute_query(
+        "UPDATE games SET game_name=%s, gathering_time=%s, start_time=%s WHERE game_id=%s",
+        (data["new_game_name"], data["new_gathering_time"], start_time, data["edit_game_id"]),
+    )
+    participants = execute_query(
+        "SELECT user_id FROM registrations WHERE game_id=%s AND status='registered'",
+        (data["edit_game_id"],), fetch=True,
+    )
+    notification = format_schedule_change(data["game_date"], data["new_game_name"],
+                                          data["new_gathering_time"], start_time, changed)
+    sent = 0
+    if changed:
+        for (user_id,) in participants:
+            try:
+                await send_text_to_user(user_id, notification, parse_mode="HTML")
+                sent += 1
+            except Exception as exc:
+                logging.error("Не удалось уведомить пользователя %s об изменении игры: %s", user_id, exc)
+    await message.answer(f"Игра изменена. Уведомлены участники: {sent}.", reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
 
 @dp.message(Form.delete_game)
