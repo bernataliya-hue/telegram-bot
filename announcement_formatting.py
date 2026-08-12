@@ -18,7 +18,7 @@ def format_announcement(games, game_rules, cost_info) -> str:
     costs_text = " ".join(cost_lines)
     return (
         "Всем привет! 👋\n"
-        "На следующей неделе играем мафию!\n\n"
+        "На следующей неделе играем в мафию!\n\n"
         f"{games_text}\n\n"
         f"💵{costs_text} 💵\n\n"
         "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
