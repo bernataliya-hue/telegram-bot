@@ -16,7 +16,7 @@ class AnnouncementFormattingTests(unittest.TestCase):
             lambda _name: "Стоимость игр 600 руб. с человека. По абонементу - бесплатно.",
         )
 
-        self.assertIn("Всем привет! 👋\nНа следующей неделе играем мафию!", announcement)
+        self.assertIn("Всем привет! 👋\nНа следующей неделе играем в мафию!", announcement)
         self.assertIn("📅 Вс 02.08 Городская мафия 🏙", announcement)
         self.assertIn("📅 Пн 03.08 Спортивная мафия 🏆", announcement)
         self.assertEqual(announcement.count("Стоимость игр 600 руб."), 1)
