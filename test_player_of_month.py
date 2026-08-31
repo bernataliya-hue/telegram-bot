@@ -7,7 +7,7 @@ class PlayerOfMonthTests(unittest.TestCase):
     def test_decorates_selected_player(self):
         self.assertEqual(
             decorate_player_of_month("Мориарти", 42, 42),
-            "Мориарти 👑 лучший игрок месяца",
+            "Мориарти 👑 игрок месяца",
         )
 
     def test_does_not_decorate_other_player(self):

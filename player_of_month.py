@@ -1,4 +1,4 @@
-PLAYER_OF_MONTH_BADGE = "👑 лучший игрок месяца"
+PLAYER_OF_MONTH_BADGE = "👑 игрок месяца"
 
 
 def decorate_player_of_month(name: str, user_id: int, player_of_month_id: int | None) -> str:
