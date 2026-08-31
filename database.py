@@ -72,6 +72,13 @@ def init_db():
     cursor.execute("ALTER TABLE registrations ADD COLUMN IF NOT EXISTS is_late BOOLEAN DEFAULT FALSE")
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS game_hosts (
+        game_id INTEGER PRIMARY KEY,
+        user_id BIGINT NOT NULL
+    )
+    """)
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS thinking_players (
         user_id BIGINT,
         game_id INTEGER,

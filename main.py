@@ -17,6 +17,7 @@ from game_editing import (
 from announcement_formatting import format_announcement
 from reminder_formatting import format_reminder_game_date
 from player_of_month import clamp_page, decorate_player_of_month
+from game_hosting import add_host_label, order_with_host_first, participant_number
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -406,6 +407,30 @@ def fetch_upcoming_games():
     return sort_games_by_date(filter_upcoming_games(fetch_active_games()))
 
 
+def get_game_host_id(game_id: int):
+    row = execute_query(
+        """
+        SELECT gh.user_id
+        FROM game_hosts gh
+        JOIN registrations r ON r.game_id = gh.game_id AND r.user_id = gh.user_id
+        WHERE gh.game_id = %s AND r.status = 'registered'
+        """,
+        (game_id,),
+        fetchone=True,
+    )
+    return row[0] if row else None
+
+
+def set_game_host(game_id: int, user_id: int):
+    execute_query(
+        """
+        INSERT INTO game_hosts (game_id, user_id) VALUES (%s, %s)
+        ON CONFLICT (game_id) DO UPDATE SET user_id = EXCLUDED.user_id
+        """,
+        (game_id, user_id),
+    )
+
+
 async def format_user_participants_async(game_id: int, title: str) -> str:
     participants = execute_query(
         """
@@ -420,22 +445,28 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
     thinking_users = set(await get_thinking(game_id))
     late_users = set(await get_late_players(game_id))
     player_of_month_id = get_player_of_month_id()
+    host_user_id = get_game_host_id(game_id)
 
     if not participants and not thinking_users:
         return f"На игру {title} пока никто не записался."
 
     response = f"Список участников на игру {title}:\n"
     participant_ids = {uid for uid, _ in participants}
-    regular_participants = [p for p in participants if p[0] not in late_users]
+    participants = order_with_host_first(participants, host_user_id)
+    regular_participants = [p for p in participants if p[0] not in late_users and p[0] != host_user_id]
     late_participants = [p for p in participants if p[0] in late_users]
 
+    host_participants = [p for p in participants if p[0] == host_user_id]
+
     idx = 1
-    for uid, nick in regular_participants + late_participants:
+    for uid, nick in host_participants + regular_participants + late_participants:
         mark = " (думает)" if uid in thinking_users else ""
         late_mark = " (опоздает)" if uid in late_users else ""
         nick = decorate_player_of_month(nick, uid, player_of_month_id)
-        response += f"{idx}. {nick}{mark}{late_mark}\n"
-        idx += 1
+        nick = add_host_label(nick, uid, host_user_id)
+        response += f"{participant_number(idx, uid, host_user_id)}. {nick}{mark}{late_mark}\n"
+        if uid != host_user_id:
+            idx += 1
 
     for uid in thinking_users:
         if uid not in participant_ids:
@@ -478,14 +509,19 @@ async def format_admin_participants_with_format(game_id: int, title: str, partic
     thinking_users = set(await get_thinking(game_id))
     late_users = set(await get_late_players(game_id))
     player_of_month_id = get_player_of_month_id()
+    host_user_id = get_game_host_id(game_id)
 
     if not participants and not thinking_users:
         return f"На игру {title} пока никто не записался."
 
     response = f"Список участников на игру {title}:\n"
-    ordered_participants = [p for p in participants if p[0] not in late_users] + [p for p in participants if p[0] in late_users]
+    ordered_participants = order_with_host_first(
+        [p for p in participants if p[0] not in late_users] + [p for p in participants if p[0] in late_users],
+        host_user_id,
+    )
 
-    for idx, (user_id, first_name, last_name, nick, tg_username, vk_username, platform, platform_user_id) in enumerate(ordered_participants, start=1):
+    regular_index = 1
+    for user_id, first_name, last_name, nick, tg_username, vk_username, platform, platform_user_id in ordered_participants:
         mark = " (думает)" if user_id in thinking_users else ""
         late_mark = " (опоздает)" if user_id in late_users else ""
         participant_view = build_admin_participant_display(
@@ -499,7 +535,10 @@ async def format_admin_participants_with_format(game_id: int, title: str, partic
             participants_format,
         )
         participant_view = decorate_player_of_month(participant_view, user_id, player_of_month_id)
-        response += f"{idx}. {participant_view}{mark}{late_mark}\n"
+        participant_view = add_host_label(participant_view, user_id, host_user_id)
+        response += f"{participant_number(regular_index, user_id, host_user_id)}. {participant_view}{mark}{late_mark}\n"
+        if user_id != host_user_id:
+            regular_index += 1
 
     participant_ids = {user_id for user_id, *_ in participants}
     for uid in thinking_users:
@@ -564,6 +603,8 @@ class Form(StatesGroup):
     admin_manual_register_action = State()
     admin_club_members = State()
     admin_player_of_month = State()
+    admin_assign_host_game = State()
+    admin_assign_host_player = State()
 
 # Главное меню
 def main_menu_keyboard(user_id):
@@ -592,6 +633,7 @@ def admin_menu_keyboard():
     builder.button(text="👥Список участников")
     builder.button(text="👥Члены клуба")
     builder.button(text="👑Игрок месяца")
+    builder.button(text="🎙Назначить ведущего")
     builder.button(text="✍️Ручная запись игрока")
     builder.button(text="🏠Главное меню")
     builder.adjust(2)
@@ -623,6 +665,7 @@ def vk_admin_menu_keyboard():
     keyboard.add_button("🚫Отмена игры", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_cancel_game"})
     keyboard.add_line()
     keyboard.add_button("👥Список участников админ", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_view_participants"})
+    keyboard.add_button("🎙Назначить ведущего", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_assign_host"})
     keyboard.add_line()
     keyboard.add_button("👥Члены клуба", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_club_members"})
     keyboard.add_button("🔔Напомнить об игре", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_reminder"})
@@ -1249,6 +1292,18 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
             reply_markup=telegram_player_of_month_keyboard(users, 0),
         )
         await state.set_state(Form.admin_player_of_month)
+    elif message.text == "🎙Назначить ведущего":
+        games = fetch_active_games()
+        if not games:
+            await message.answer("Нет доступных игр.", reply_markup=admin_menu_keyboard())
+            return
+        builder = InlineKeyboardBuilder()
+        for game_id, name, date in games:
+            builder.button(text=f"{date} {name}", callback_data=f"hostgame_{game_id}")
+        builder.button(text="🔙Назад", callback_data="hostgame_back")
+        builder.adjust(1)
+        await message.answer("Выберите игру:", reply_markup=builder.as_markup())
+        await state.set_state(Form.admin_assign_host_game)
     elif message.text == "✍️Ручная запись игрока":
         games = sort_games_by_date(filter_upcoming_games(execute_query(
             "SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE",
@@ -1660,6 +1715,73 @@ async def admin_player_of_month_back_handler(callback: types.CallbackQuery, stat
     await state.set_state(Form.admin_menu)
 
 
+@dp.callback_query(Form.admin_assign_host_game, F.data.startswith("hostgame_"))
+async def admin_assign_host_game_handler(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "hostgame_back":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("Вы вернулись в админ-меню.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        await callback.answer()
+        return
+
+    game_id = int(callback.data.removeprefix("hostgame_"))
+    players = execute_query(
+        """
+        SELECT u.user_id, u.mafia_nick
+        FROM registrations r JOIN users u ON u.user_id = r.user_id
+        WHERE r.game_id = %s AND r.status = 'registered'
+        ORDER BY u.mafia_nick, u.user_id
+        """,
+        (game_id,),
+        fetch=True,
+    )
+    if not players:
+        await callback.answer("На эту игру никто не записан.", show_alert=True)
+        return
+    builder = InlineKeyboardBuilder()
+    for user_id, nick in players:
+        builder.button(text=nick or f"ID {user_id}", callback_data=f"hostplayer_{user_id}")
+    builder.button(text="🔙Назад", callback_data="hostplayer_back")
+    builder.adjust(1)
+    await state.update_data(host_game_id=game_id)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("Выберите ведущего из записавшихся игроков:", reply_markup=builder.as_markup())
+    await state.set_state(Form.admin_assign_host_player)
+    await callback.answer()
+
+
+@dp.callback_query(Form.admin_assign_host_player, F.data.startswith("hostplayer_"))
+async def admin_assign_host_player_handler(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "hostplayer_back":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("Вы вернулись в админ-меню.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        await callback.answer()
+        return
+    data = await state.get_data()
+    game_id = data.get("host_game_id")
+    user_id = int(callback.data.removeprefix("hostplayer_"))
+    player = execute_query(
+        """
+        SELECT u.mafia_nick FROM registrations r JOIN users u ON u.user_id = r.user_id
+        WHERE r.game_id = %s AND r.user_id = %s AND r.status = 'registered'
+        """,
+        (game_id, user_id),
+        fetchone=True,
+    )
+    if not game_id or not player:
+        await callback.answer("Игрок больше не записан на эту игру.", show_alert=True)
+        return
+    set_game_host(game_id, user_id)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(
+        f"Ведущим назначен {player[0] or f'ID {user_id}' }.",
+        reply_markup=admin_menu_keyboard(),
+    )
+    await state.set_state(Form.admin_menu)
+    await callback.answer("Ведущий назначен")
+
+
 @dp.message(Form.admin_manual_register_game)
 async def admin_manual_register_game_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙Назад":
@@ -1972,44 +2094,9 @@ async def callback_participants(callback: types.CallbackQuery, state: FSMContext
 
     game_name, game_date = game
 
-    participants = execute_query("""
-        SELECT u.user_id, u.mafia_nick
-        FROM registrations r
-        JOIN users u ON r.user_id = u.user_id
-        WHERE r.game_id = %s
-            AND r.status = %s
-    """, (game_id,'registered'), fetch=True)
-
-    thinking_users = await get_thinking(game_id)
-    thinking_users = set(map(int, thinking_users))
-    late_users = await get_late_players(game_id)
-    player_of_month_id = get_player_of_month_id()
-
     title = f"📅{game_date} {game_name}"
-    if not participants and not thinking_users:
-        await callback.message.answer(f"На игру {title} пока никто не записался.", reply_markup=main_menu_keyboard(callback.from_user.id))
-    else:
-        response = f"Список участников на игру {title}:\n"
-        participant_ids = {uid for uid, _ in participants}
-        regular_participants = [p for p in participants if p[0] not in late_users]
-        late_participants = [p for p in participants if p[0] in late_users]
-
-        idx = 1
-        for uid, nick in regular_participants + late_participants:
-            mark = " (думает)" if uid in thinking_users else ""
-            late_mark = " (опоздает)" if uid in late_users else ""
-            nick = decorate_player_of_month(nick, uid, player_of_month_id)
-            response += f"{idx}. {nick}{mark}{late_mark}\n"
-            idx += 1
-
-        for uid in thinking_users:
-            if uid not in participant_ids:
-                ud = execute_query("SELECT mafia_nick FROM users WHERE user_id=%s", (uid,), fetchone=True)
-                if ud:
-                    nick = decorate_player_of_month(ud[0], uid, player_of_month_id)
-                    response += f"- {nick} (думает)\n"
-
-        await callback.message.answer(response, reply_markup=main_menu_keyboard(callback.from_user.id))
+    response = await format_user_participants_async(game_id, title)
+    await callback.message.answer(response, reply_markup=main_menu_keyboard(callback.from_user.id))
 
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
@@ -3970,7 +4057,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         send_vk_message(vk_user_id, f"Сообщение отправлено {count} пользователям.", vk_admin_menu_keyboard())
         return True
 
-    if current in {"admin_delete_game", "admin_restore_game", "admin_cancel_game", "admin_view_participants"}:
+    if current in {"admin_delete_game", "admin_restore_game", "admin_cancel_game", "admin_view_participants", "admin_assign_host_game"}:
         selected_game = get_vk_selected_game(state, normalized_text, payload)
         if not selected_game:
             send_vk_message(vk_user_id, "Пожалуйста, выбери игру кнопкой ниже.")
@@ -3995,6 +4082,26 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             clear_vk_state(internal_user_id)
             send_vk_message(vk_user_id, f"Игра '{game_date} {game_name}' отменена.", vk_admin_menu_keyboard())
             return True
+        if current == "admin_assign_host_game":
+            players = execute_query(
+                """
+                SELECT u.user_id, u.mafia_nick FROM registrations r
+                JOIN users u ON u.user_id = r.user_id
+                WHERE r.game_id = %s AND r.status = 'registered'
+                ORDER BY u.mafia_nick, u.user_id
+                """,
+                (game_id,),
+                fetch=True,
+            )
+            if not players:
+                send_vk_message(vk_user_id, "На эту игру никто не записан.", vk_admin_menu_keyboard())
+                clear_vk_state(internal_user_id)
+                return True
+            set_vk_state(internal_user_id, "admin_assign_host_player", host_game_id=game_id, host_players=players)
+            lines = ["Выберите ведущего из записавшихся игроков:"]
+            lines.extend(f"{index}. {nick or f'ID {user_id}'}" for index, (user_id, nick) in enumerate(players, 1))
+            send_vk_message(vk_user_id, "\n".join(lines), vk_number_choice_keyboard(len(players)))
+            return True
         game_title = build_game_title(game_name, game_date)
         send_vk_message(
             vk_user_id,
@@ -4002,6 +4109,33 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             vk_admin_menu_keyboard()
         )
         clear_vk_state(internal_user_id)
+        return True
+
+    if current == "admin_assign_host_player":
+        players = state.get("host_players", [])
+        selected_index = payload.get("select_index")
+        if not isinstance(selected_index, int):
+            try:
+                selected_index = int(normalized_text) - 1
+            except ValueError:
+                selected_index = -1
+        if selected_index < 0 or selected_index >= len(players):
+            send_vk_message(vk_user_id, "Выберите игрока кнопкой ниже.", vk_number_choice_keyboard(len(players)))
+            return True
+        user_id, nick = players[selected_index]
+        game_id = state.get("host_game_id")
+        still_registered = execute_query(
+            "SELECT 1 FROM registrations WHERE game_id = %s AND user_id = %s AND status = 'registered'",
+            (game_id, user_id),
+            fetchone=True,
+        )
+        if not still_registered:
+            send_vk_message(vk_user_id, "Игрок больше не записан на эту игру.", vk_admin_menu_keyboard())
+            clear_vk_state(internal_user_id)
+            return True
+        set_game_host(game_id, user_id)
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, f"Ведущим назначен {nick or f'ID {user_id}' }.", vk_admin_menu_keyboard())
         return True
 
     return False
@@ -4284,6 +4418,11 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "👥Список участников админ" or command == "admin_view_participants"):
         games = fetch_active_games()
         send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?", use_game_buttons=True)
+        return
+
+    if vk_user_id == VK_ADMIN_ID and (normalized_text == "🎙Назначить ведущего" or command == "admin_assign_host"):
+        games = fetch_active_games()
+        send_vk_games_list(vk_user_id, games, "admin_assign_host_game", "Выберите игру:", use_game_buttons=True)
         return
 
 
