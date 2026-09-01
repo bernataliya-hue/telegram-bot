@@ -1,4 +1,4 @@
-HOST_LABEL = "Ведуший"
+HOST_LABEL = "🎙Ведуший"
 
 
 def order_with_host_first(participants, host_user_id):
