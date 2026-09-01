@@ -14,5 +14,5 @@ def participant_number(index, user_id, host_user_id):
 
 def add_host_label(display_name, user_id, host_user_id):
     if user_id == host_user_id:
-        return f"{display_name} - {HOST_LABEL}"
+        return f"{display_name} {HOST_LABEL}"
     return display_name
