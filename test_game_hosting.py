@@ -10,7 +10,7 @@ class GameHostingTests(unittest.TestCase):
 
     def test_host_has_zero_number_and_label(self):
         self.assertEqual(participant_number(1, 2, 2), 0)
-        self.assertEqual(add_host_label("Two", 2, 2), "Two - Ведуший")
+        self.assertEqual(add_host_label("Two", 2, 2), "Two - 🎙Ведуший")
 
     def test_regular_player_is_unchanged(self):
         self.assertEqual(participant_number(3, 3, 2), 3)
