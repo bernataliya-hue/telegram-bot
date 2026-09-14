@@ -1388,9 +1388,8 @@ async def process_simple_calendar(callback_query: types.CallbackQuery, callback_
         await state.update_data(game_date=formatted_date)
 
         builder = ReplyKeyboardBuilder()
-        builder.button(text="🏙️Городская мафия")
-        builder.button(text="🌃Спортивная мафия")
-        builder.button(text="🏆Рейтинговая игра")
+        for game_type in GAME_TYPES:
+            builder.button(text=game_type)
         builder.adjust(1)
 
         await callback_query.message.answer(
@@ -1412,9 +1411,8 @@ async def process_add_game_date_text(message: types.Message, state: FSMContext):
     await state.update_data(game_date=formatted_date)
 
     builder = ReplyKeyboardBuilder()
-    builder.button(text="🏙️Городская мафия")
-    builder.button(text="🌃Спортивная мафия")
-    builder.button(text="🏆Рейтинговая игра")
+    for game_type in GAME_TYPES:
+        builder.button(text=game_type)
     builder.adjust(1)
 
     await message.answer(
@@ -3286,12 +3284,9 @@ def vk_club_members_keyboard(users, page: int = 0, page_size: int = CLUB_MEMBERS
 
 def vk_game_type_keyboard():
     keyboard = VkKeyboard(one_time=True)
-    keyboard.add_button("🏙️Городская мафия", color=VkKeyboardColor.SECONDARY, payload={"game_type": "🏙️Городская мафия"})
-    keyboard.add_line()
-    keyboard.add_button("🌃Спортивная мафия", color=VkKeyboardColor.SECONDARY, payload={"game_type": "🌃Спортивная мафия"})
-    keyboard.add_line()
-    keyboard.add_button("🏆Рейтинговая игра", color=VkKeyboardColor.SECONDARY, payload={"game_type": "🏆Рейтинговая игра"})
-    keyboard.add_line()
+    for game_type in GAME_TYPES:
+        keyboard.add_button(game_type, color=VkKeyboardColor.SECONDARY, payload={"game_type": game_type})
+        keyboard.add_line()
     keyboard.add_button("🔙 Назад", color=VkKeyboardColor.SECONDARY, payload={"command": "back"})
     return keyboard.get_keyboard()
 
@@ -3788,8 +3783,11 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             "1": "🏙️Городская мафия",
             "2": "🌃Спортивная мафия",
             "3": "🏆Рейтинговая игра",
+            "4": "🌱Спортивная мафия для новичков",
             "🏙️городская мафия": "🏙️Городская мафия",
             "🌃спортивная мафия": "🌃Спортивная мафия",
+            "🌱спортивная мафия для новичков": "🌱Спортивная мафия для новичков",
+            "спортивная мафия для новичков": "🌱Спортивная мафия для новичков",
             "🏆рейтинговая игра": "🏆Рейтинговая игра",
         }
         selected_type = payload.get("game_type") or game_types.get(text.strip().lower())

@@ -1,9 +1,12 @@
 import unittest
 
-from game_editing import format_schedule_change, normalize_game_time, schedule_change_recipients
+from game_editing import GAME_TYPES, format_schedule_change, normalize_game_time, schedule_change_recipients
 
 
 class GameEditingTests(unittest.TestCase):
+    def test_beginner_sport_game_is_available(self):
+        self.assertIn("🌱Спортивная мафия для новичков", GAME_TYPES)
+
     def test_normalize_game_time(self):
         self.assertEqual(normalize_game_time("9:05"), "09:05")
         self.assertEqual(normalize_game_time(" 19:30 "), "19:30")
