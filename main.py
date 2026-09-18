@@ -18,6 +18,7 @@ from announcement_formatting import format_announcement
 from reminder_formatting import format_reminder_game_date
 from player_of_month import clamp_page, decorate_player_of_month
 from game_hosting import add_host_label, order_with_host_first, participant_number
+from club_members import format_club_member_label
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -3240,7 +3241,7 @@ def telegram_club_members_keyboard(users, page: int = 0):
     current_page, total_pages = club_members_page_details(users, page)
     start = current_page * CLUB_MEMBERS_PAGE_SIZE
     for user in users[start:start + CLUB_MEMBERS_PAGE_SIZE]:
-        builder.button(text=club_member_nick(user), callback_data=f"club_member_{user[0]}")
+        builder.button(text=format_club_member_label(user), callback_data=f"club_member_{user[0]}")
     builder.adjust(1)
 
     navigation_buttons = []
@@ -3263,7 +3264,7 @@ def vk_club_members_keyboard(users, page: int = 0, page_size: int = CLUB_MEMBERS
         if index > 0 and index % 2 == 0:
             keyboard.add_line()
         keyboard.add_button(
-            club_member_nick(user),
+            format_club_member_label(user),
             color=VkKeyboardColor.SECONDARY,
             payload={"command": "club_member_select", "user_id": user[0], "page": current_page}
         )
