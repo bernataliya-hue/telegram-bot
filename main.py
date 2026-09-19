@@ -454,7 +454,7 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
 
     response = f"Список участников на игру {title}:\n"
     participant_ids = {uid for uid, _ in participants}
-    participants = order_with_host_first(participants, host_user_id)
+    participants = order_with_host_first(participants, host_user_id, late_users)
     host_participants = [p for p in participants if p[0] == host_user_id]
     regular_participants = [p for p in participants if p[0] != host_user_id]
 
@@ -516,7 +516,7 @@ async def format_admin_participants_with_format(game_id: int, title: str, partic
         return f"На игру {title} пока никто не записался."
 
     response = f"Список участников на игру {title}:\n"
-    ordered_participants = order_with_host_first(participants, host_user_id)
+    ordered_participants = order_with_host_first(participants, host_user_id, late_users)
 
     regular_index = 1
     for user_id, first_name, last_name, nick, tg_username, vk_username, platform, platform_user_id in ordered_participants:
@@ -2175,6 +2175,7 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
         else:
             response = f"Список участников на игру {message.text}:\n"
             participant_ids = {uid for uid, _ in participants}
+            participants = order_with_host_first(participants, None, late_users)
             idx = 1
             for uid, nick in participants:
                 mark = " (думает)" if uid in thinking_users else ""
