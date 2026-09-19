@@ -65,11 +65,13 @@ def init_db():
         user_id BIGINT,
         game_id INTEGER,
         status TEXT DEFAULT 'registered',
+        registered_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
         PRIMARY KEY(user_id, game_id)
     )
     """)
 
     cursor.execute("ALTER TABLE registrations ADD COLUMN IF NOT EXISTS is_late BOOLEAN DEFAULT FALSE")
+    cursor.execute("ALTER TABLE registrations ADD COLUMN IF NOT EXISTS registered_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()")
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS game_hosts (

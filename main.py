@@ -439,6 +439,7 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
         FROM registrations r
         JOIN users u ON r.user_id = u.user_id
         WHERE r.game_id = %s AND r.status = %s
+        ORDER BY r.registered_at, r.user_id
         """,
         (game_id, 'registered'),
         fetch=True
@@ -454,13 +455,11 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
     response = f"Список участников на игру {title}:\n"
     participant_ids = {uid for uid, _ in participants}
     participants = order_with_host_first(participants, host_user_id)
-    regular_participants = [p for p in participants if p[0] not in late_users and p[0] != host_user_id]
-    late_participants = [p for p in participants if p[0] in late_users]
-
     host_participants = [p for p in participants if p[0] == host_user_id]
+    regular_participants = [p for p in participants if p[0] != host_user_id]
 
     idx = 1
-    for uid, nick in host_participants + regular_participants + late_participants:
+    for uid, nick in host_participants + regular_participants:
         mark = " (думает)" if uid in thinking_users else ""
         late_mark = " (опоздает)" if uid in late_users else ""
         nick = decorate_player_of_month(nick, uid, player_of_month_id)
@@ -503,6 +502,7 @@ async def format_admin_participants_with_format(game_id: int, title: str, partic
         FROM registrations r
         JOIN users u ON r.user_id = u.user_id
         WHERE r.game_id = %s AND r.status = %s
+        ORDER BY r.registered_at, r.user_id
         """,
         (game_id, 'registered'),
         fetch=True
@@ -516,10 +516,7 @@ async def format_admin_participants_with_format(game_id: int, title: str, partic
         return f"На игру {title} пока никто не записался."
 
     response = f"Список участников на игру {title}:\n"
-    ordered_participants = order_with_host_first(
-        [p for p in participants if p[0] not in late_users] + [p for p in participants if p[0] in late_users],
-        host_user_id,
-    )
+    ordered_participants = order_with_host_first(participants, host_user_id)
 
     regular_index = 1
     for user_id, first_name, last_name, nick, tg_username, vk_username, platform, platform_user_id in ordered_participants:
@@ -1939,7 +1936,11 @@ async def admin_manual_register_action_handler(message: types.Message, state: FS
             INSERT INTO registrations (user_id, game_id, status)
             VALUES (%s, %s, 'registered')
             ON CONFLICT (user_id, game_id)
-            DO UPDATE SET status = 'registered', is_late = FALSE
+            DO UPDATE SET status = 'registered', is_late = FALSE,
+                registered_at = CASE
+                    WHEN registrations.status = 'registered' THEN registrations.registered_at
+                    ELSE clock_timestamp()
+                END
             """,
             (target_user_id, game_id)
         )
@@ -1971,7 +1972,11 @@ async def admin_manual_register_action_handler(message: types.Message, state: FS
             INSERT INTO registrations (user_id, game_id, status)
             VALUES (%s, %s, 'registered')
             ON CONFLICT (user_id, game_id)
-            DO UPDATE SET status = 'registered'
+            DO UPDATE SET status = 'registered',
+                registered_at = CASE
+                    WHEN registrations.status = 'registered' THEN registrations.registered_at
+                    ELSE clock_timestamp()
+                END
             """,
             (target_user_id, game_id)
         )
@@ -2156,6 +2161,7 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
             JOIN users u ON r.user_id = u.user_id
             WHERE r.game_id = %s
                 AND r.status = %s
+            ORDER BY r.registered_at, r.user_id
         """, (game_id,'registered'), fetch=True)
 
         # Получаем думающих через Redis
@@ -2168,11 +2174,9 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
             await message.answer(f"На игру {message.text} пока никто не записался.", reply_markup=main_menu_keyboard(message.from_user.id))
         else:
             response = f"Список участников на игру {message.text}:\n"
-            regular_participants = [p for p in participants if p[0] not in late_users]
-            late_participants = [p for p in participants if p[0] in late_users]
             participant_ids = {uid for uid, _ in participants}
             idx = 1
-            for uid, nick in regular_participants + late_participants:
+            for uid, nick in participants:
                 mark = " (думает)" if uid in thinking_users else ""
                 late_mark = " (опоздает)" if uid in late_users else ""
                 nick = decorate_player_of_month(nick, uid, player_of_month_id)
@@ -2239,7 +2243,11 @@ async def register_game(message: types.Message, state: FSMContext):
             INSERT INTO registrations (user_id, game_id, status, is_late)
             VALUES (%s, %s, 'registered', FALSE)
             ON CONFLICT (user_id, game_id)
-            DO UPDATE SET status = 'registered', is_late = FALSE
+            DO UPDATE SET status = 'registered', is_late = FALSE,
+                registered_at = CASE
+                    WHEN registrations.status = 'registered' THEN registrations.registered_at
+                    ELSE clock_timestamp()
+                END
         """, (internal_user_id, game_id))
         await message.answer(
             build_registration_success_text(game_date, game_name),
@@ -2336,7 +2344,11 @@ async def callback_thinking_reminder_yes(callback: types.CallbackQuery, state: F
         INSERT INTO registrations (user_id, game_id, status, is_late)
         VALUES (%s, %s, 'registered', FALSE)
         ON CONFLICT (user_id, game_id)
-        DO UPDATE SET status = 'registered', is_late = FALSE
+        DO UPDATE SET status = 'registered', is_late = FALSE,
+                registered_at = CASE
+                    WHEN registrations.status = 'registered' THEN registrations.registered_at
+                    ELSE clock_timestamp()
+                END
         """,
         (user_id, game_id)
     )
@@ -2447,7 +2459,11 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
         INSERT INTO registrations (user_id, game_id, status, is_late)
         VALUES (%s, %s, 'registered', FALSE)
         ON CONFLICT (user_id, game_id)
-        DO UPDATE SET status = 'registered', is_late = FALSE
+        DO UPDATE SET status = 'registered', is_late = FALSE,
+                registered_at = CASE
+                    WHEN registrations.status = 'registered' THEN registrations.registered_at
+                    ELSE clock_timestamp()
+                END
     """, (user_id, game_id))
 
     await callback.message.answer(
@@ -3510,7 +3526,11 @@ async def handle_vk_registration(internal_user_id: int, game_id: int):
         INSERT INTO registrations (user_id, game_id, status, is_late)
         VALUES (%s, %s, 'registered', FALSE)
         ON CONFLICT (user_id, game_id)
-        DO UPDATE SET status = 'registered', is_late = FALSE
+        DO UPDATE SET status = 'registered', is_late = FALSE,
+                registered_at = CASE
+                    WHEN registrations.status = 'registered' THEN registrations.registered_at
+                    ELSE clock_timestamp()
+                END
         """,
         (internal_user_id, game_id)
     )
