@@ -1,11 +1,16 @@
 HOST_LABEL = "🎙Ведуший"
 
 
-def order_with_host_first(participants, host_user_id):
-    """Put the selected host first without changing the order of other players."""
-    if host_user_id is None:
-        return list(participants)
-    return sorted(participants, key=lambda participant: participant[0] != host_user_id)
+def order_with_host_first(participants, host_user_id, late_user_ids=()):
+    """Put punctual players before late ones and the host first in their group."""
+    late_user_ids = set(late_user_ids)
+    return sorted(
+        participants,
+        key=lambda participant: (
+            participant[0] in late_user_ids,
+            participant[0] != host_user_id if host_user_id is not None else False,
+        ),
+    )
 
 
 def participant_number(index, user_id, host_user_id):

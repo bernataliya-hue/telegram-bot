@@ -8,6 +8,20 @@ class GameHostingTests(unittest.TestCase):
         players = [(1, "One"), (2, "Two"), (3, "Three")]
         self.assertEqual(order_with_host_first(players, 2), [players[1], players[0], players[2]])
 
+    def test_late_players_are_moved_to_the_bottom(self):
+        players = [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")]
+        self.assertEqual(
+            order_with_host_first(players, 2, {1, 3}),
+            [players[1], players[3], players[0], players[2]],
+        )
+
+    def test_late_host_stays_with_late_players(self):
+        players = [(1, "One"), (2, "Two"), (3, "Three")]
+        self.assertEqual(
+            order_with_host_first(players, 2, {2, 3}),
+            [players[0], players[1], players[2]],
+        )
+
     def test_host_has_zero_number_and_label(self):
         self.assertEqual(participant_number(1, 2, 2), 0)
         self.assertEqual(add_host_label("Two", 2, 2), "Two - 🎙Ведуший")
