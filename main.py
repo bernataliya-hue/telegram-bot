@@ -8,6 +8,8 @@ import time
 import uuid
 import calendar
 import database
+from game_dates import parse_date, stored_game_date
+from user_identity import PLATFORM_MANUAL, detect_platform_by_user_id
 from game_editing import (
     GAME_TYPES,
     format_schedule_change,
@@ -108,18 +110,16 @@ else:
 dp = Dispatcher(storage=storage)
 
 # Инициализация БД
-database.init_db()
+LEGACY_GAME_YEAR = database.init_db()
 
 def execute_query(query, params=(), fetch=False, fetchone=False):
     conn = database.get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(query, params)
-        if fetch:
-            return cursor.fetchall()
-        if fetchone:
-            return cursor.fetchone()
+        result = cursor.fetchall() if fetch else cursor.fetchone() if fetchone else None
         conn.commit()
+        return result
     except Exception as e:
         logging.error(f"Database error: {e}")
         conn.rollback()
@@ -134,10 +134,6 @@ def make_internal_user_id(platform: str, platform_user_id: int) -> int:
     if platform == PLATFORM_VK:
         return -abs(numeric_user_id)
     return abs(numeric_user_id)
-
-
-def detect_platform_by_user_id(user_id: int) -> str:
-    return PLATFORM_VK if int(user_id) < 0 else PLATFORM_TELEGRAM
 
 
 def get_platform_user_id(user_id: int) -> int:
@@ -180,6 +176,8 @@ def get_display_username(user_row) -> str:
 
 
 def build_profile_link(platform: str, platform_user_id: int, telegram_username: str = None, vk_username: str = None) -> str:
+    if platform == PLATFORM_MANUAL:
+        return "Добавлен вручную, аккаунт не привязан"
     if telegram_username:
         return f"https://t.me/{telegram_username}"
     if platform == PLATFORM_TELEGRAM:
@@ -306,6 +304,8 @@ def upsert_user(
 
 async def send_text_to_user(user_id: int, text: str, parse_mode: str = None, reply_markup=None):
     platform = detect_platform_by_user_id(user_id)
+    if platform == PLATFORM_MANUAL:
+        raise ValueError("У игрока, добавленного вручную, нет аккаунта для уведомлений")
     platform_user_id = get_platform_user_id(user_id)
 
     if platform == PLATFORM_TELEGRAM:
@@ -686,7 +686,19 @@ def admin_participants_format_keyboard():
 
 # Helper для "думающих" (теперь в БД)
 async def mark_thinking(user_id: int, game_id: int):
-    execute_query("INSERT INTO thinking_players (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (user_id, game_id))
+    # One transaction releases the seat and clears both versions of the late flag.
+    conn = database.get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE registrations SET status = 'declined', is_late = FALSE WHERE user_id = %s AND game_id = %s",
+                    (user_id, game_id),
+                )
+                cursor.execute("DELETE FROM late_players WHERE user_id = %s AND game_id = %s", (user_id, game_id))
+                cursor.execute("INSERT INTO thinking_players (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (user_id, game_id))
+    finally:
+        conn.close()
 
 async def get_thinking(game_id: int):
     rows = execute_query("SELECT user_id FROM thinking_players WHERE game_id = %s", (game_id,), fetch=True)
@@ -799,29 +811,13 @@ def reminder_game_text(game_name: str, game_date: str) -> str:
     return f"{format_reminder_game_date(game_date)} {game_name}\n{get_game_rules(game_name, game_date).strip()}"
 
 def parse_game_date(game_date: str):
-    if not game_date:
-        return None
-
-    normalized = game_date.strip()
-    parts = normalized.split()
-    if len(parts) >= 2 and parts[0] in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']:
-        normalized = parts[1]
-
-    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%d.%m"):
-        try:
-            parsed = datetime.datetime.strptime(normalized, fmt).date()
-            if fmt == "%d.%m":
-                return parsed.replace(year=datetime.date.today().year)
-            return parsed
-        except ValueError:
-            continue
-    return None
+    return parse_date(game_date, default_year=LEGACY_GAME_YEAR)
 
 
 def is_upcoming_game(game_date: str) -> bool:
     parsed = parse_game_date(game_date)
     if not parsed:
-        return True
+        return False
     return parsed >= datetime.date.today()
 
 def filter_upcoming_games(games):
@@ -838,13 +834,22 @@ def sort_games_by_date(games, date_index: int = 2):
     return sorted(games, key=sort_key)
 
 
-def next_platform_user_id(platform: str) -> int:
+def create_manual_user(first_name, last_name, mafia_nick):
     row = execute_query(
-        "SELECT COALESCE(MAX(ABS(platform_user_id)), 0) + 1 FROM users WHERE platform = %s AND platform_user_id IS NOT NULL",
-        (platform,),
-        fetchone=True
+        """INSERT INTO users (user_id, platform, platform_user_id, first_name, last_name, mafia_nick)
+           VALUES (nextval('manual_user_ids'), 'manual', NULL, %s, %s, %s)
+           RETURNING user_id""",
+        (first_name, last_name, mafia_nick), fetchone=True,
     )
-    return int(row[0]) if row and row[0] is not None else 1
+    return row[0]
+
+
+def fetch_available_game(game_id):
+    game = execute_query(
+        "SELECT game_name, game_date FROM games WHERE game_id = %s AND is_deleted = FALSE",
+        (game_id,), fetchone=True,
+    )
+    return game if game and is_upcoming_game(game[1]) else None
 
 
 def admin_manual_action_keyboard():
@@ -1368,6 +1373,9 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
 
 @dp.callback_query(SimpleCalendarCallback.filter())
 async def process_simple_calendar(callback_query: types.CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext):
+    if not is_telegram_admin(callback_query.from_user.id) or await state.get_state() != Form.add_game_date.state:
+        await callback_query.answer("Календарь недоступен. Откройте добавление игры заново.", show_alert=True)
+        return
     if callback_data.act == SimpleCalAct.cancel:
         current_state = await state.get_state()
         if current_state == Form.add_game_date.state:
@@ -1379,10 +1387,7 @@ async def process_simple_calendar(callback_query: types.CallbackQuery, callback_
 
     selected, date = await SimpleCalendar().process_selection(callback_query, callback_data)
     if selected:
-        # Форматируем дату: Сб 21.02
-        days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-        day_str = days[date.weekday()]
-        formatted_date = f"{day_str} {date.strftime('%d.%m')}"
+        formatted_date = stored_game_date(date)
 
         await state.update_data(game_date=formatted_date)
 
@@ -1400,13 +1405,12 @@ async def process_simple_calendar(callback_query: types.CallbackQuery, callback_
 
 @dp.message(Form.add_game_date)
 async def process_add_game_date_text(message: types.Message, state: FSMContext):
-    parsed = parse_game_date(message.text)
+    parsed = parse_date(message.text)
     if not parsed:
         await message.answer("Не удалось распознать дату. Введите дату в формате ДД.ММ или ДД.ММ.ГГГГ.")
         return
 
-    days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-    formatted_date = f"{days[parsed.weekday()]} {parsed.strftime('%d.%m')}"
+    formatted_date = stored_game_date(parsed)
     await state.update_data(game_date=formatted_date)
 
     builder = ReplyKeyboardBuilder()
@@ -1544,7 +1548,7 @@ async def admin_edit_start_time_handler(message: types.Message, state: FSMContex
 
 @dp.message(Form.delete_game)
 async def delete_game_handler(message: types.Message, state: FSMContext):
-    if message.text == "🔙Назад":
+    if (message.text or "").replace(" ", "") == "🔙Назад":
         await message.answer("Ты вернулся в админ-меню", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
         return
@@ -1892,19 +1896,9 @@ async def admin_manual_register_last_name_handler(message: types.Message, state:
 async def admin_manual_register_nick_handler(message: types.Message, state: FSMContext):
     await state.update_data(manual_nick=message.text.strip())
     data = await state.get_data()
-    platform = PLATFORM_TELEGRAM
-    platform_user_id = next_platform_user_id(PLATFORM_TELEGRAM)
-    upsert_user(
-        platform=platform,
-        platform_user_id=platform_user_id,
-        first_name=data.get("manual_first_name"),
-        last_name=data.get("manual_last_name"),
-        mafia_nick=data.get("manual_nick"),
-        age=None,
-        telegram_username=None,
-        vk_username=None,
+    internal_user_id = create_manual_user(
+        data.get("manual_first_name"), data.get("manual_last_name"), data.get("manual_nick")
     )
-    internal_user_id = make_internal_user_id(platform, platform_user_id)
     await state.update_data(manual_target_user_id=internal_user_id)
     await message.answer(
         f"Игрок {data.get('manual_first_name')} {data.get('manual_last_name')} ({data.get('manual_nick')}) создан.\n"
@@ -1988,16 +1982,6 @@ async def admin_manual_register_action_handler(message: types.Message, state: FS
         return
 
     if message.text == "🤔Отметить думает":
-        execute_query(
-            """
-            INSERT INTO registrations (user_id, game_id, status)
-            VALUES (%s, %s, 'declined')
-            ON CONFLICT (user_id, game_id)
-            DO UPDATE SET status = 'declined', is_late = FALSE
-            """,
-            (target_user_id, game_id)
-        )
-        await unmark_late(target_user_id, game_id)
         await mark_thinking(target_user_id, game_id)
         await message.answer(f"Для игрока отмечен статус «думает» на игру {game_title}.", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
@@ -2030,7 +2014,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             SELECT g.game_id, g.game_name, g.game_date 
             FROM registrations r
             JOIN games g ON r.game_id=g.game_id
-            WHERE r.user_id=%s
+            WHERE r.user_id=%s AND r.status = 'registered' AND g.is_deleted = FALSE
         """, (internal_user_id,), fetch=True)
         games = sort_games_by_date(filter_upcoming_games(games))
         if not games:
@@ -2220,7 +2204,7 @@ async def register_game(message: types.Message, state: FSMContext):
         (clean_text, clean_text, clean_text),
         fetchone=True
         )
-    if result:
+    if result and is_upcoming_game(result[2]):
         game_id, game_name, game_date = result
         user_age_row = execute_query("SELECT age FROM users WHERE user_id = %s", (internal_user_id,), fetchone=True)
         user_age = user_age_row[0] if user_age_row else None
@@ -2251,6 +2235,7 @@ async def register_game(message: types.Message, state: FSMContext):
                     ELSE clock_timestamp()
                 END
         """, (internal_user_id, game_id))
+        await unmark_late(internal_user_id, game_id)
         await message.answer(
             build_registration_success_text(game_date, game_name),
             reply_markup=late_button_keyboard(game_id)
@@ -2309,13 +2294,9 @@ async def callback_thinking_reminder_yes(callback: types.CallbackQuery, state: F
     game_id = int(callback.data.split("_")[2])
     user_id = telegram_internal_user_id(callback.from_user)
 
-    game = execute_query(
-        "SELECT game_name, game_date FROM games WHERE game_id = %s",
-        (game_id,),
-        fetchone=True
-    )
+    game = fetch_available_game(game_id)
     if not game:
-        await callback.answer("Игра не найдена.", show_alert=True)
+        await callback.answer("Игра удалена, завершена или недоступна для записи.", show_alert=True)
         return
 
     game_name, game_date = game
@@ -2355,6 +2336,7 @@ async def callback_thinking_reminder_yes(callback: types.CallbackQuery, state: F
         (user_id, game_id)
     )
 
+    await unmark_late(user_id, game_id)
     await callback.message.answer(
         build_registration_success_text(game_date, game_name),
         reply_markup=late_button_keyboard(game_id)
@@ -2396,16 +2378,15 @@ async def callback_think(callback: types.CallbackQuery):
     game_id = int(callback.data.split("_")[1])
     user_id = telegram_internal_user_id(callback.from_user)
 
-    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s", (game_id,), fetchone=True)
-
+    game = fetch_available_game(game_id)
     if not game:
-        await callback.answer("Игра не найдена.", show_alert=True)
+        await callback.answer("Игра удалена, завершена или недоступна для записи.", show_alert=True)
         return
 
     # Сохраняем игрока в БД как думающего
     await mark_thinking(user_id, game_id)
 
-    await callback.answer("Админ уведомлен, что вы думаете!😊")
+    await callback.answer("Отмечено «думаю». Место не забронировано.")
     await callback.message.edit_reply_markup(reply_markup=None)
 
     # Notify admin
@@ -2418,14 +2399,9 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
     game_id = int(callback.data.split("_")[1])
     user_id = telegram_internal_user_id(callback.from_user)
 
-    game = execute_query(
-        "SELECT game_name, game_date FROM games WHERE game_id = %s",
-        (game_id,),
-        fetchone=True
-    )
-
+    game = fetch_available_game(game_id)
     if not game:
-        await callback.answer("Игра не найдена.", show_alert=True)
+        await callback.answer("Игра удалена, завершена или недоступна для записи.", show_alert=True)
         return
 
     game_name, game_date = game
@@ -2468,6 +2444,7 @@ async def callback_reg(callback: types.CallbackQuery, state: FSMContext):
                 END
     """, (user_id, game_id))
 
+    await unmark_late(user_id, game_id)
     await callback.message.answer(
         build_registration_success_text(game_date, game_name),
         reply_markup=late_button_keyboard(game_id)
@@ -2814,6 +2791,8 @@ async def send_game_reminders(user_ids, game_ids):
     # caller combines selections).  Never send the same reminder twice.
     unique_user_ids = list(dict.fromkeys(user_ids))
     for uid in unique_user_ids:
+        if detect_platform_by_user_id(uid) == PLATFORM_MANUAL:
+            continue
         try:
             platform = detect_platform_by_user_id(uid)
             if platform == PLATFORM_TELEGRAM:
@@ -3519,9 +3498,9 @@ async def handle_thinking_reminder_decline(user_id: int, game_id: int):
     return "Отметку «думаю» сняли. Спасибо за ответ!"
 
 async def handle_vk_registration(internal_user_id: int, game_id: int):
-    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s AND is_deleted = FALSE", (game_id,), fetchone=True)
+    game = fetch_available_game(game_id)
     if not game:
-        return "Игра не найдена."
+        return "Игра удалена, завершена или недоступна для записи."
 
     game_name, game_date = game
     user_age_row = execute_query("SELECT age FROM users WHERE user_id = %s", (internal_user_id,), fetchone=True)
@@ -3551,6 +3530,7 @@ async def handle_vk_registration(internal_user_id: int, game_id: int):
         (internal_user_id, game_id)
     )
 
+    await unmark_late(internal_user_id, game_id)
     user_row = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (internal_user_id,), fetchone=True)
     if user_row:
         await notify_admin(f"Новая запись: {user_row[0]} {user_row[1]} ({user_row[2]}) на {game_date} {game_name}")
@@ -3793,7 +3773,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         return True
 
     if current == "admin_add_date":
-        parsed = parse_game_date(normalized_text)
+        parsed = parse_date(normalized_text)
 
         if not parsed:
             send_vk_message(
@@ -3802,7 +3782,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
                 vk_back_keyboard()
             )
             return True
-        formatted_date = f"{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][parsed.weekday()]} {parsed.strftime('%d.%m')}"
+        formatted_date = stored_game_date(parsed)
         set_vk_state(
             internal_user_id,
             "admin_add_type",
@@ -4398,12 +4378,15 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
             return
 
         if command == "reminder_think":
+            game = fetch_available_game(game_id)
+            if not game:
+                send_vk_message(vk_user_id, "Игра удалена, завершена или недоступна для записи.", vk_main_menu_keyboard(internal_user_id))
+                return
             await mark_thinking(internal_user_id, game_id)
-            game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s", (game_id,), fetchone=True)
             user_row = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (internal_user_id,), fetchone=True)
             if game and user_row:
                 await notify_admin(f"🤔Игрок думает: {user_row[0]} {user_row[1]} ({user_row[2]}) на {game[1]} {game[0]}")
-            send_vk_message(vk_user_id, "Админ уведомлен, что ты думаешь😊", vk_main_menu_keyboard(internal_user_id))
+            send_vk_message(vk_user_id, "Отмечено «думаю». Место не забронировано.", vk_main_menu_keyboard(internal_user_id))
             return
 
         execute_query(
