@@ -12,7 +12,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import AsyncMock, MagicMock, Mock
 
-from game_dates import parse_date, stored_game_date
+from game_dates import parse_date, stored_game_date, display_game_date, game_choice_label, match_game_label
 from user_identity import MANUAL_ID_START, PLATFORM_MANUAL, detect_platform_by_user_id
 
 
@@ -106,7 +106,9 @@ class BotRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.ns = load_functions('main.py', {
             'database': NS(get_connection=lambda: Connection(self.db)),
             'datetime': datetime, 'logging': logging, 'parse_date': parse_date,
-            'stored_game_date': stored_game_date, 'LEGACY_GAME_YEAR': 2026,
+            'stored_game_date': stored_game_date, 'display_game_date': display_game_date,
+            'game_choice_label': game_choice_label, 'match_game_label': match_game_label,
+            'LEGACY_GAME_YEAR': 2026,
             'PLATFORM_TELEGRAM': 'telegram', 'PLATFORM_VK': 'vk', 'PLATFORM_MANUAL': PLATFORM_MANUAL,
             'detect_platform_by_user_id': detect_platform_by_user_id,
             'Form': NS(menu='menu', admin_menu='admin_menu', add_game_type='add_game_type'),
