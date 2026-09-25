@@ -11,6 +11,7 @@ import database
 from game_editing import (
     GAME_TYPES,
     format_schedule_change,
+    game_cancellation_recipients,
     normalize_game_time,
     schedule_change_recipients,
 )
@@ -2572,15 +2573,29 @@ async def admin_cancel_game_handler(message: types.Message, state: FSMContext):
     if result:
         game_id = result[0]
         game_info = message.text
-        participants = execute_query("SELECT user_id FROM registrations WHERE game_id = %s", (game_id,), fetch=True)
-        for (user_id,) in participants:
+        participants = execute_query(
+            "SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered'",
+            (game_id,), fetch=True,
+        )
+        thinking_players = execute_query(
+            "SELECT user_id FROM thinking_players WHERE game_id = %s",
+            (game_id,), fetch=True,
+        )
+        recipients = game_cancellation_recipients(
+            (user_id for (user_id,) in participants),
+            (user_id for (user_id,) in thinking_players),
+        )
+        sent = 0
+        for user_id in recipients:
             try:
                 await send_text_to_user(user_id, f"⚠️ Внимание! Отмена игры на {game_info}!⚠️")
+                sent += 1
             except Exception as e:
                 logging.error(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+        execute_query("DELETE FROM thinking_players WHERE game_id = %s", (game_id,))
         execute_query("DELETE FROM registrations WHERE game_id = %s", (game_id,))
         execute_query("DELETE FROM games WHERE game_id = %s", (game_id,))
-        await message.answer(f"Игра '{game_info}' отменена. Игроки ({len(participants)} чел.) уведомлены.", reply_markup=admin_menu_keyboard())
+        await message.answer(f"Игра '{game_info}' отменена. Игроки ({sent} чел.) уведомлены.", reply_markup=admin_menu_keyboard())
     else:
         await message.answer("Игра не найдена.", reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
@@ -4085,13 +4100,34 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             send_vk_message(vk_user_id, f"Игра '{game_date} {game_name}' восстановлена.", vk_admin_menu_keyboard())
             return True
         if current == "admin_cancel_game":
-            participants = execute_query("SELECT user_id FROM registrations WHERE game_id = %s", (game_id,), fetch=True)
-            for (participant_id,) in participants:
-                await send_text_to_user(participant_id, f"⚠️Внимание! Отмена игры на {game_date} {game_name}!⚠️")
+            participants = execute_query(
+                "SELECT user_id FROM registrations WHERE game_id = %s AND status = 'registered'",
+                (game_id,), fetch=True,
+            )
+            thinking_players = execute_query(
+                "SELECT user_id FROM thinking_players WHERE game_id = %s",
+                (game_id,), fetch=True,
+            )
+            recipients = game_cancellation_recipients(
+                (user_id for (user_id,) in participants),
+                (user_id for (user_id,) in thinking_players),
+            )
+            sent = 0
+            for participant_id in recipients:
+                try:
+                    await send_text_to_user(participant_id, f"⚠️Внимание! Отмена игры на {game_date} {game_name}!⚠️")
+                    sent += 1
+                except Exception as exc:
+                    logging.error("Не удалось уведомить пользователя %s об отмене игры: %s", participant_id, exc)
+            execute_query("DELETE FROM thinking_players WHERE game_id = %s", (game_id,))
             execute_query("DELETE FROM registrations WHERE game_id = %s", (game_id,))
             execute_query("DELETE FROM games WHERE game_id = %s", (game_id,))
             clear_vk_state(internal_user_id)
-            send_vk_message(vk_user_id, f"Игра '{game_date} {game_name}' отменена.", vk_admin_menu_keyboard())
+            send_vk_message(
+                vk_user_id,
+                f"Игра '{game_date} {game_name}' отменена. Игроки ({sent} чел.) уведомлены.",
+                vk_admin_menu_keyboard(),
+            )
             return True
         if current == "admin_assign_host_game":
             players = execute_query(

@@ -1,6 +1,12 @@
 import unittest
 
-from game_editing import GAME_TYPES, format_schedule_change, normalize_game_time, schedule_change_recipients
+from game_editing import (
+    GAME_TYPES,
+    format_schedule_change,
+    game_cancellation_recipients,
+    normalize_game_time,
+    schedule_change_recipients,
+)
 
 
 class GameEditingTests(unittest.TestCase):
@@ -35,6 +41,11 @@ class GameEditingTests(unittest.TestCase):
         recipients = dict(schedule_change_recipients([10], [10]))
 
         self.assertEqual(recipients, {10: True})
+
+    def test_cancellation_includes_registered_and_thinking_players_once(self):
+        recipients = game_cancellation_recipients([10, 20], [20, 30, 40])
+
+        self.assertEqual(recipients, [10, 20, 30, 40])
 
 
 if __name__ == "__main__":

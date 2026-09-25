@@ -23,6 +23,14 @@ def schedule_change_recipients(registered_users, thinking_users):
     return list(recipients.items())
 
 
+def game_cancellation_recipients(registered_users, thinking_users):
+    """Return each player affected by a cancellation exactly once."""
+    return [
+        user_id
+        for user_id, _ in schedule_change_recipients(registered_users, thinking_users)
+    ]
+
+
 def normalize_game_time(value: str) -> str | None:
     value = (value or "").strip()
     if not re.fullmatch(r"\d{1,2}:\d{2}", value):
