@@ -114,6 +114,7 @@ class BotRegressionTests(unittest.IsolatedAsyncioTestCase):
             'Form': NS(menu='menu', admin_menu='admin_menu', add_game_type='add_game_type'),
         })
         self.ns.update(
+            InlineKeyboardBuilder=Mock,
             ADMIN_IDS={self.ns['ADMIN_ID'], self.ns['SECOND_ADMIN_ID']},
             notify_admin=AsyncMock(), is_game_full=AsyncMock(return_value=False),
             late_button_keyboard=Mock(return_value=None), main_menu_keyboard=Mock(return_value=None),

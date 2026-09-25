@@ -1225,6 +1225,48 @@ async def admin_panel(message: types.Message, state: FSMContext):
     await message.answer("Добро пожаловать в админ-панель!", reply_markup=admin_menu_keyboard())
     await state.set_state(Form.admin_menu)
 
+
+@dp.callback_query(F.data.startswith("admin_game_"))
+async def admin_game_choice_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Handle game choices without leaving a Reply keyboard on screen."""
+    parts = callback.data.split("_")
+    action = parts[2] if len(parts) > 2 else "back"
+    if action == "back":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("Вы вернулись в админ-меню.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        await callback.answer()
+        return
+    try:
+        game_id = int(parts[3])
+    except (IndexError, ValueError):
+        await callback.answer("Не удалось определить игру.", show_alert=True)
+        return
+    game = execute_query(
+        "SELECT game_id, game_name, game_date FROM games WHERE game_id = %s",
+        (game_id,), fetchone=True,
+    )
+    if not game:
+        await callback.answer("Игра не найдена.", show_alert=True)
+        return
+    label = f"{display_game_date(game[2])} {game[1]}"
+    handlers = {
+        "edit": admin_edit_game_handler,
+        "delete": delete_game_handler,
+        "restore": restore_game_handler,
+        "view": admin_view_participants_handler,
+        "manual": admin_manual_register_game_handler,
+        "cancel": admin_cancel_game_handler,
+    }
+    handler = handlers.get(action)
+    if not handler:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+    proxy = callback.message.model_copy(update={"text": label})
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await handler(proxy, state)
+    await callback.answer()
+
 @dp.message(Form.admin_menu)
 async def admin_menu_handler(message: types.Message, state: FSMContext):
     if message.text == "➕Добавить игру":
@@ -1240,48 +1282,48 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         if not games:
             await message.answer("Список активных игр пуст.")
             return
-        builder = ReplyKeyboardBuilder()
+        builder = InlineKeyboardBuilder()
         for _, name, date in games:
-            builder.button(text=f"{display_game_date(date)} {name}")
-        builder.button(text="🔙Назад")
+            builder.button(text=f"{display_game_date(date)} {name}", callback_data=f"admin_game_edit_{_}")
+        builder.button(text="🔙Назад", callback_data="admin_game_back")
         builder.adjust(1)
-        await message.answer("Какую игру изменить?", reply_markup=builder.as_markup(resize_keyboard=True))
+        await message.answer("Какую игру изменить?", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_edit_game)
     elif message.text == "❌Удалить игру":
         games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
         if not games:
             await message.answer("Список активных игр пуст.")
             return
-        builder = ReplyKeyboardBuilder()
+        builder = InlineKeyboardBuilder()
         for _, name, date in games:
-            builder.button(text=f"{name} {display_game_date(date)}")
-        builder.button(text="🔙 Назад")
+            builder.button(text=f"{name} {display_game_date(date)}", callback_data=f"admin_game_delete_{_}")
+        builder.button(text="🔙 Назад", callback_data="admin_game_back")
         builder.adjust(1)
-        await message.answer("Какую игру удалить?", reply_markup=builder.as_markup(resize_keyboard=True))
+        await message.answer("Какую игру удалить?", reply_markup=builder.as_markup())
         await state.set_state(Form.delete_game)
     elif message.text == "♻️Восстановить игру":
         games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = TRUE", fetch=True))
         if not games:
             await message.answer("Нет удаленных игр для восстановления.")
             return
-        builder = ReplyKeyboardBuilder()
+        builder = InlineKeyboardBuilder()
         for _, name, date in games:
-            builder.button(text=f"{name} {display_game_date(date)}")
-        builder.button(text="🔙Назад")
+            builder.button(text=f"{name} {display_game_date(date)}", callback_data=f"admin_game_restore_{_}")
+        builder.button(text="🔙 Назад", callback_data="admin_game_back")
         builder.adjust(1)
-        await message.answer("Какую игру восстановить?", reply_markup=builder.as_markup(resize_keyboard=True))
+        await message.answer("Какую игру восстановить?", reply_markup=builder.as_markup())
         await state.set_state(Form.restore_game)
     elif message.text == "👥Список участников":
         games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
         if not games:
             await message.answer("Список игр пуст.")
             return
-        builder = ReplyKeyboardBuilder()
+        builder = InlineKeyboardBuilder()
         for _, name, date in games:
-            builder.button(text=f"{display_game_date(date)} {name}")
-        builder.button(text="🔙Назад")
+            builder.button(text=f"{display_game_date(date)} {name}", callback_data=f"admin_game_view_{_}")
+        builder.button(text="🔙Назад", callback_data="admin_game_back")
         builder.adjust(1)
-        await message.answer("Выберите игру для просмотра списка участников:", reply_markup=builder.as_markup(resize_keyboard=True))
+        await message.answer("Выберите игру для просмотра списка участников:", reply_markup=builder.as_markup())
         await state.set_state(Form.view_participants)
 
     elif message.text == "👥Члены клуба":
@@ -1326,24 +1368,24 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         if not games:
             await message.answer("Нет доступных игр для ручной записи.")
             return
-        builder = ReplyKeyboardBuilder()
+        builder = InlineKeyboardBuilder()
         for _, name, date in games:
-            builder.button(text=f"{display_game_date(date)} {name}")
-        builder.button(text="🔙Назад")
+            builder.button(text=f"{display_game_date(date)} {name}", callback_data=f"admin_game_manual_{_}")
+        builder.button(text="🔙Назад", callback_data="admin_game_back")
         builder.adjust(1)
-        await message.answer("Выберите игру для ручной записи:", reply_markup=builder.as_markup(resize_keyboard=True))
+        await message.answer("Выберите игру для ручной записи:", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_manual_register_game)
     elif message.text == "🚫Отмена игры":
         games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
         if not games:
             await message.answer("Список игр пуст.")
             return
-        builder = ReplyKeyboardBuilder()
+        builder = InlineKeyboardBuilder()
         for _, name, date in games:
-            builder.button(text=f"{display_game_date(date)} {name}")
-        builder.button(text="🔙Назад")
+            builder.button(text=f"{display_game_date(date)} {name}", callback_data=f"admin_game_cancel_{_}")
+        builder.button(text="🔙Назад", callback_data="admin_game_back")
         builder.adjust(1)
-        await message.answer("Выберите игру для отмены и уведомления игроков:", reply_markup=builder.as_markup(resize_keyboard=True))
+        await message.answer("Выберите игру для отмены и уведомления игроков:", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_cancel_game)
     elif message.text == "🔔Напомнить об игре":
         games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
@@ -1368,18 +1410,56 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         )
         await state.set_state(Form.admin_get_announcement)
     elif message.text == "📢Рассылка":
-        builder = ReplyKeyboardBuilder()
-        builder.button(text="👥Всем пользователям")
-        builder.button(text="✅Только записавшимся")
-        builder.button(text="❌Только не записавшимся")
-        builder.button(text="👤Выбор пользователей")
-        builder.button(text="🔙Назад")
+        builder = InlineKeyboardBuilder()
+        for text, key in (("👥Всем пользователям", "all"), ("✅Только записавшимся", "registered"), ("❌Только не записавшимся", "not_registered"), ("👤Выбор пользователей", "custom")):
+            builder.button(text=text, callback_data=f"admin_audience_{key}")
+        builder.button(text="🔙Назад", callback_data="admin_audience_back")
         builder.adjust(1)
-        await message.answer("Выберите аудиторию для рассылки:", reply_markup=builder.as_markup(resize_keyboard=True))
+        await message.answer("Выберите аудиторию для рассылки:", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_broadcast)
     elif message.text == "🏠Главное меню":
         await message.answer("Вы вернулись в главное меню.", reply_markup=main_menu_keyboard(message.from_user.id))
         await state.set_state(Form.menu)
+
+
+@dp.callback_query(F.data.startswith("admin_audience_"))
+async def admin_audience_choice_callback(callback: types.CallbackQuery, state: FSMContext):
+    key = callback.data.rsplit("_", 1)[-1]
+    labels = {"all": "👥Всем пользователям", "registered": "✅Только записавшимся", "not_registered": "❌Только не записавшимся", "custom": "👤Выбор пользователей"}
+    if key == "back":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("Вы вернулись в админ-меню.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        await callback.answer()
+        return
+    proxy = callback.message.model_copy(update={"text": labels.get(key, "")})
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await admin_broadcast_handler(proxy, state)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("game_type_"))
+async def game_type_choice_callback(callback: types.CallbackQuery, state: FSMContext):
+    index = int(callback.data.rsplit("_", 1)[-1])
+    if index < 0 or index >= len(GAME_TYPES):
+        await callback.answer("Неизвестный тип игры.", show_alert=True)
+        return
+    proxy = callback.message.model_copy(update={"text": GAME_TYPES[index]})
+    await callback.message.edit_reply_markup(reply_markup=None)
+    current = await state.get_state()
+    if current == Form.add_game_type.state:
+        await process_add_game_type(proxy, state)
+    elif current == Form.admin_edit_game_type.state:
+        await admin_edit_game_type_handler(proxy, state)
+    await callback.answer()
+
+
+def game_type_inline_keyboard():
+    builder = InlineKeyboardBuilder()
+    for index, game_type in enumerate(GAME_TYPES):
+        builder.button(text=game_type, callback_data=f"game_type_{index}")
+    builder.adjust(1)
+    return builder.as_markup()
 
 @dp.callback_query(SimpleCalendarCallback.filter())
 async def process_simple_calendar(callback_query: types.CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext):
@@ -1401,14 +1481,9 @@ async def process_simple_calendar(callback_query: types.CallbackQuery, callback_
 
         await state.update_data(game_date=formatted_date)
 
-        builder = ReplyKeyboardBuilder()
-        for game_type in GAME_TYPES:
-            builder.button(text=game_type)
-        builder.adjust(1)
-
         await callback_query.message.answer(
             f"Выбрана дата: {formatted_date}\nТеперь выберите тип игры:",
-            reply_markup=builder.as_markup(resize_keyboard=True)
+            reply_markup=game_type_inline_keyboard()
         )
         await state.set_state(Form.add_game_type)
 
@@ -1423,14 +1498,9 @@ async def process_add_game_date_text(message: types.Message, state: FSMContext):
     formatted_date = stored_game_date(parsed)
     await state.update_data(game_date=formatted_date)
 
-    builder = ReplyKeyboardBuilder()
-    for game_type in GAME_TYPES:
-        builder.button(text=game_type)
-    builder.adjust(1)
-
     await message.answer(
         f"Дата принята: {formatted_date}\nТеперь выберите тип игры:",
-        reply_markup=builder.as_markup(resize_keyboard=True)
+        reply_markup=game_type_inline_keyboard()
     )
     await state.set_state(Form.add_game_type)
 
@@ -1470,11 +1540,7 @@ async def admin_edit_game_handler(message: types.Message, state: FSMContext):
     gathering, start = default_game_times(game[1], game[2])
     await state.update_data(edit_game_id=game[0], old_game_name=game[1], game_date=game[2],
                             old_gathering_time=game[3] or gathering, old_start_time=game[4] or start)
-    builder = ReplyKeyboardBuilder()
-    for game_type in GAME_TYPES:
-        builder.button(text=game_type)
-    builder.adjust(1)
-    await message.answer("Выберите вид игры:", reply_markup=builder.as_markup(resize_keyboard=True))
+    await message.answer("Выберите вид игры:", reply_markup=game_type_inline_keyboard())
     await state.set_state(Form.admin_edit_game_type)
 
 
