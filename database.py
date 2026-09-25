@@ -1,6 +1,9 @@
 import os
 import time
 import psycopg2
+import datetime
+import logging
+from game_dates import parse_date, stored_game_date
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -39,6 +42,12 @@ def init_db():
     cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'telegram'")
     cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_user_id BIGINT")
     cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vk_username TEXT")
+    cursor.execute("""
+        CREATE SEQUENCE IF NOT EXISTS manual_user_ids AS BIGINT
+        INCREMENT BY -1 MINVALUE -9223372036854775808
+        MAXVALUE -4611686018427387904 START WITH -4611686018427387904
+        NO CYCLE
+    """)
     cursor.execute("UPDATE users SET platform = 'telegram' WHERE platform IS NULL")
     cursor.execute("UPDATE users SET platform_user_id = user_id WHERE platform_user_id IS NULL AND platform = 'telegram'")
     cursor.execute("""
@@ -104,7 +113,34 @@ def init_db():
     """)
     cursor.execute("INSERT INTO settings (key, value) VALUES ('schedule', 'Расписание пока не установлено') ON CONFLICT (key) DO NOTHING")
     cursor.execute("INSERT INTO settings (key, value) VALUES ('player_of_month', '') ON CONFLICT (key) DO NOTHING")
+    # Legacy rows contain no recoverable year. Freeze their previous interpretation
+    # at upgrade time, so they cannot become upcoming again next January.
+    cursor.execute(
+        "INSERT INTO settings (key, value) VALUES ('legacy_game_year', %s) ON CONFLICT (key) DO NOTHING",
+        (str(datetime.date.today().year),),
+    )
+    cursor.execute("SELECT value FROM settings WHERE key = 'legacy_game_year'")
+    legacy_year = int(cursor.fetchone()[0])
+    cursor.execute("SELECT game_id, game_name, game_date FROM games")
+    for game_id, game_name, game_date in cursor.fetchall():
+        value = (game_date or '').split()[-1:]
+        if not value or len(value[0].split('.')) != 2:
+            continue
+        parsed = parse_date(game_date, default_year=legacy_year)
+        if not parsed:
+            logging.warning('Cannot migrate date for game %s: %r', game_id, game_date)
+            continue
+        full_date = stored_game_date(parsed)
+        cursor.execute(
+            "SELECT 1 FROM games WHERE game_name = %s AND game_date = %s AND game_id <> %s",
+            (game_name, full_date, game_id),
+        )
+        if cursor.fetchone():
+            logging.warning('Duplicate date during migration for game %s; keeping legacy date', game_id)
+            continue
+        cursor.execute("UPDATE games SET game_date = %s WHERE game_id = %s", (full_date, game_id))
     
     conn.commit()
     cursor.close()
     conn.close()
+    return legacy_year
