@@ -1,4 +1,4 @@
-import datetime
+from game_dates import parse_date
 
 
 def format_reminder_game_date(game_date: str) -> str:
@@ -8,15 +8,7 @@ def format_reminder_game_date(game_date: str) -> str:
     if len(parts) >= 2 and parts[0] in ('Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'):
         value = parts[1]
 
-    parsed = None
-    for date_format in ("%d.%m.%Y", "%Y-%m-%d", "%d.%m"):
-        try:
-            parsed = datetime.datetime.strptime(value, date_format).date()
-            if date_format == "%d.%m":
-                parsed = parsed.replace(year=datetime.date.today().year)
-            break
-        except ValueError:
-            continue
+    parsed = parse_date(value)
 
     if not parsed:
         return (game_date or "").strip()
