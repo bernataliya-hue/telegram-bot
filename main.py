@@ -701,12 +701,15 @@ async def mark_thinking(user_id: int, game_id: int):
     try:
         with conn:
             with conn.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM thinking_players WHERE user_id = %s AND game_id = %s", (user_id, game_id))
+                already_thinking = cursor.fetchone() is not None
                 cursor.execute(
                     "UPDATE registrations SET status = 'declined', is_late = FALSE WHERE user_id = %s AND game_id = %s",
                     (user_id, game_id),
                 )
                 cursor.execute("DELETE FROM late_players WHERE user_id = %s AND game_id = %s", (user_id, game_id))
                 cursor.execute("INSERT INTO thinking_players (user_id, game_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (user_id, game_id))
+                return not already_thinking
     finally:
         conn.close()
 
@@ -811,6 +814,14 @@ def reminder_actions_keyboard(game_id: int):
     return builder.as_markup()
 
 
+def registered_reminder_keyboard(game_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⏰Опоздаю", callback_data=f"late_{game_id}")
+    builder.button(text="❌Отменить запись", callback_data=f"cancelreg_{game_id}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
 def reminder_game_text(game_name: str, game_date: str) -> str:
     """Build the game block used in a reminder.
 
@@ -819,6 +830,16 @@ def reminder_game_text(game_name: str, game_date: str) -> str:
     for both kinds of records, so the weekday is restored when possible.
     """
     return f"{format_reminder_game_date(game_date)} {game_name}\n{get_game_rules(game_name, game_date).strip()}"
+
+def registered_reminder_text(game_name: str, game_date: str) -> str:
+    return (f"Привет! Напоминаем, что ты записался на игру {format_reminder_game_date(game_date)} {game_name}.\n"
+            "Будем тебя ждать!😊\nПредупреди, если опоздаешь.")
+
+
+def thinking_reminder_text(game_name: str, game_date: str) -> str:
+    return (f"Привет! Пора определяться придешь ли ты на игру {format_reminder_game_date(game_date)} {game_name}.\n"
+            "Будем тебя ждать!😊\nПредупреди, если опоздаешь.")
+
 
 def parse_game_date(game_date: str):
     return parse_date(game_date, default_year=LEGACY_GAME_YEAR)
@@ -2055,7 +2076,13 @@ async def admin_manual_register_action_handler(message: types.Message, state: FS
 @dp.message(Form.menu)
 async def menu_handler(message: types.Message, state: FSMContext):
     if message.text == "📝Записаться на игру":
-        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
+        user_id = telegram_internal_user_id(message.from_user)
+        games = sort_games_by_date(filter_upcoming_games(execute_query("""
+            SELECT g.game_id, g.game_name, g.game_date FROM games g
+            WHERE g.is_deleted = FALSE AND NOT EXISTS (
+                SELECT 1 FROM registrations r WHERE r.game_id=g.game_id AND r.user_id=%s AND r.status='registered'
+            )
+        """, (user_id,), fetch=True)))
         if not games:
             await message.answer("К сожалению, на данный момент игр для записи нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -2447,14 +2474,14 @@ async def callback_think(callback: types.CallbackQuery):
         return
 
     # Сохраняем игрока в БД как думающего
-    await mark_thinking(user_id, game_id)
+    newly_marked = await mark_thinking(user_id, game_id)
 
     await callback.answer("Отмечено «думаю». Место не забронировано.")
     await callback.message.edit_reply_markup(reply_markup=None)
 
     # Notify admin
     ud = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (user_id,), fetchone=True)
-    if ud:
+    if newly_marked and ud:
         await notify_admin(f"🤔Игрок думает: {ud[0]} {ud[1]} ({ud[2]}) на {game[1]} {game[0]}")
 
 @dp.callback_query(F.data.startswith("reg_"))
@@ -2867,17 +2894,38 @@ async def send_game_reminders(user_ids, game_ids):
                 await send_text_to_user(uid, "🔔 Привет! На этой неделе играем в мафию:")
 
             for game_id, g_name, g_date in games:
+                registration = execute_query(
+                    "SELECT status FROM registrations WHERE user_id=%s AND game_id=%s",
+                    (uid, game_id), fetchone=True,
+                )
+                is_registered = bool(registration and registration[0] == 'registered')
+                is_thinking = bool(execute_query(
+                    "SELECT 1 FROM thinking_players WHERE user_id=%s AND game_id=%s",
+                    (uid, game_id), fetchone=True,
+                ))
+                if is_registered:
+                    reminder_text = registered_reminder_text(g_name, g_date)
+                    telegram_keyboard = registered_reminder_keyboard(game_id)
+                    vk_keyboard = vk_reminder_actions_keyboard(game_id, True)
+                elif is_thinking:
+                    reminder_text = thinking_reminder_text(g_name, g_date)
+                    telegram_keyboard = thinking_reminder_keyboard(game_id)
+                    vk_keyboard = vk_thinking_reminder_actions_keyboard(game_id)
+                else:
+                    reminder_text = reminder_game_text(g_name, g_date)
+                    telegram_keyboard = reminder_actions_keyboard(game_id)
+                    vk_keyboard = vk_reminder_actions_keyboard(game_id, False)
                 if platform == PLATFORM_TELEGRAM:
                     await bot.send_message(
                         get_platform_user_id(uid),
-                        reminder_game_text(g_name, g_date),
-                        reply_markup=reminder_actions_keyboard(game_id),
+                        reminder_text,
+                        reply_markup=telegram_keyboard,
                     )
                 else:
                     await send_text_to_user(
                         uid,
-                        reminder_game_text(g_name, g_date),
-                        reply_markup=vk_reminder_actions_keyboard(game_id, False),
+                        reminder_text,
+                        reply_markup=vk_keyboard,
                     )
 
             closing_text = "Записывайся на игры!\nБудем тебя ждать!😊"
@@ -4342,7 +4390,9 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if normalized_text == "📝Записаться на игру" or command == "register":
-        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_register_select", "Выбери игру для записи:", use_game_buttons=True)
+        games = fetch_upcoming_games()
+        games = [game for game in games if not execute_query("SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s AND status='registered'", (internal_user_id, game[0]), fetchone=True)]
+        send_vk_games_list(vk_user_id, games, "vk_register_select", "Выбери игру для записи:", use_game_buttons=True)
         return
 
     if normalized_text == "❌Отменить запись" or command == "cancel_registration":
@@ -4442,9 +4492,9 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
             if not game:
                 send_vk_message(vk_user_id, "Игра удалена, завершена или недоступна для записи.", vk_main_menu_keyboard(internal_user_id))
                 return
-            await mark_thinking(internal_user_id, game_id)
+            newly_marked = await mark_thinking(internal_user_id, game_id)
             user_row = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id=%s", (internal_user_id,), fetchone=True)
-            if game and user_row:
+            if newly_marked and game and user_row:
                 await notify_admin(f"🤔Игрок думает: {user_row[0]} {user_row[1]} ({user_row[2]}) на {game[1]} {game[0]}")
             send_vk_message(vk_user_id, "Отмечено «думаю». Место не забронировано.", vk_main_menu_keyboard(internal_user_id))
             return
