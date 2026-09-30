@@ -1,11 +1,24 @@
-PLAYER_OF_MONTH_BADGE = "👑Игрок месяца"
+PLAYER_TITLES = {
+    "month": "👑Игрок месяца",
+    "mvp": "🏅 MVP",
+    "sheriff": "🕵🏻 Лучший шериф",
+    "don": "💍 Лучший дон",
+    "red": "♥️ Лучший красный",
+    "black": "🖤 Лучший чёрный",
+}
+PLAYER_OF_MONTH_BADGE = PLAYER_TITLES["month"]
 
 
-def decorate_player_of_month(name: str, user_id: int, player_of_month_id: int | None) -> str:
-    """Add the award badge to a participant name when the IDs match."""
-    if player_of_month_id is not None and int(user_id) == int(player_of_month_id):
-        return f"{name} {PLAYER_OF_MONTH_BADGE}"
-    return name
+def decorate_player_of_month(name: str, user_id: int, title_holders) -> str:
+    """Append every title held by this participant."""
+    if isinstance(title_holders, dict):
+        badges = [PLAYER_TITLES[key] for key, holder_id in title_holders.items()
+                  if key in PLAYER_TITLES and holder_id is not None and int(user_id) == int(holder_id)]
+    elif title_holders is not None and int(user_id) == int(title_holders):
+        badges = [PLAYER_OF_MONTH_BADGE]
+    else:
+        badges = []
+    return f"{name} {' '.join(badges)}" if badges else name
 
 
 def clamp_page(item_count: int, requested_page: int, page_size: int = 10) -> tuple[int, int]:
