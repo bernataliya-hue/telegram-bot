@@ -1821,6 +1821,10 @@ async def admin_player_of_month_select_handler(callback: types.CallbackQuery, st
     title_key = (await state.get_data()).get("player_title_key", "month")
     set_player_of_month(user_id, title_key)
     display_name = user[2] or f"{user[0] or ''} {user[1] or ''}".strip() or f"ID {user_id}"
+    try:
+        await send_text_to_user(user_id, f"🎉 Поздравляем! Тебе присвоен титул «{PLAYER_TITLES[title_key]}».")
+    except Exception as exc:
+        logging.warning("Не удалось уведомить игрока %s о присвоении титула: %s", user_id, exc)
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
         f"{PLAYER_TITLES[title_key]} назначен игрок {display_name}.",
