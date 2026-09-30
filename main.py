@@ -200,7 +200,15 @@ def fetch_club_members():
 
 
 def get_player_of_month_id():
-    rows = execute_query("SELECT key, value FROM settings WHERE key = 'player_of_month' OR key LIKE 'player_title_%'", fetch=True)
+    try:
+        rows = execute_query(
+            "SELECT key, value FROM settings WHERE key = 'player_of_month' OR key LIKE 'player_title_%'",
+            fetch=True,
+        )
+    except Exception:
+        # Award badges are optional; a settings lookup must not hide participant lists.
+        logging.exception("Не удалось загрузить титулы игроков")
+        return {}
     holders = {}
     for key, value in rows or []:
         title_key = "month" if key == "player_of_month" else key.removeprefix("player_title_")
@@ -2199,18 +2207,35 @@ async def menu_handler(message: types.Message, state: FSMContext):
 async def callback_participants(callback: types.CallbackQuery, state: FSMContext):
     game_id = int(callback.data.split("_")[1])
 
-    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s AND is_deleted = FALSE", (game_id,), fetchone=True)
+    # Acknowledge immediately so Telegram does not leave the button spinning
+    # while database queries build the participant list.
+    await callback.answer()
+
+    try:
+        game = execute_query(
+            "SELECT game_name, game_date FROM games WHERE game_id = %s AND is_deleted = FALSE",
+            (game_id,),
+            fetchone=True,
+        )
+    except Exception:
+        logging.exception("Не удалось загрузить игру %s для списка участников", game_id)
+        await callback.message.answer("Не удалось загрузить список участников. Попробуйте ещё раз позже.")
+        return
     if not game:
-        await callback.answer("Игра не найдена.", show_alert=True)
+        await callback.message.answer("Игра не найдена.")
         return
 
     game_name, game_date = game
 
     title = f"📅{display_game_date(game_date)} {game_name}"
-    response = await format_user_participants_async(game_id, title)
+    try:
+        response = await format_user_participants_async(game_id, title)
+    except Exception:
+        logging.exception("Не удалось сформировать список участников для игры %s", game_id)
+        await callback.message.answer("Не удалось загрузить список участников. Попробуйте ещё раз позже.")
+        return
     await callback.message.answer(response, reply_markup=main_menu_keyboard(callback.from_user.id))
 
-    await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
     await state.set_state(Form.menu)
 
