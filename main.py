@@ -19,7 +19,7 @@ from game_editing import (
 )
 from announcement_formatting import format_announcement
 from reminder_formatting import format_reminder_game_date
-from player_of_month import clamp_page, decorate_player_of_month
+from player_of_month import PLAYER_TITLES, clamp_page, decorate_player_of_month
 from game_hosting import add_host_label, order_with_host_first, participant_number
 from club_members import format_club_member_label
 
@@ -200,23 +200,27 @@ def fetch_club_members():
 
 
 def get_player_of_month_id():
-    row = execute_query("SELECT value FROM settings WHERE key = 'player_of_month'", fetchone=True)
-    if not row or not row[0]:
-        return None
-    try:
-        return int(row[0])
-    except (TypeError, ValueError):
-        logging.warning("Некорректный player_of_month в settings: %r", row[0])
-        return None
+    rows = execute_query("SELECT key, value FROM settings WHERE key = 'player_of_month' OR key LIKE 'player_title_%'", fetch=True)
+    holders = {}
+    for key, value in rows or []:
+        title_key = "month" if key == "player_of_month" else key.removeprefix("player_title_")
+        if title_key not in PLAYER_TITLES or not value:
+            continue
+        try:
+            holders[title_key] = int(value)
+        except (TypeError, ValueError):
+            logging.warning("Некорректный титул игрока %s в settings: %r", key, value)
+    return holders
 
 
-def set_player_of_month(user_id: int):
+def set_player_of_month(user_id: int, title_key: str = "month"):
+    setting_key = "player_of_month" if title_key == "month" else f"player_title_{title_key}"
     execute_query(
         """
-        INSERT INTO settings (key, value) VALUES ('player_of_month', %s)
+        INSERT INTO settings (key, value) VALUES (%s, %s)
         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
         """,
-        (str(user_id),),
+        (setting_key, str(user_id)),
     )
 
 
@@ -641,7 +645,7 @@ def admin_menu_keyboard():
     builder.button(text="📢Рассылка")
     builder.button(text="👥Список участников")
     builder.button(text="👥Члены клуба")
-    builder.button(text="👑Игрок месяца")
+    builder.button(text="🏆Титулы игроков")
     builder.button(text="🎙Назначить ведущего")
     builder.button(text="✍️Ручная запись игрока")
     builder.button(text="🏠Главное меню")
@@ -1358,16 +1362,18 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
             reply_markup=telegram_club_members_keyboard(users, 0),
         )
         await state.set_state(Form.admin_club_members)
-    elif message.text == "👑Игрок месяца":
+    elif message.text == "🏆Титулы игроков":
         users = fetch_club_members()
         if not users:
             await message.answer("В боте пока нет зарегистрированных игроков.", reply_markup=admin_menu_keyboard())
             return
+        builder = InlineKeyboardBuilder()
+        for key, title in PLAYER_TITLES.items():
+            builder.button(text=title, callback_data=f"player_title_{key}")
+        builder.button(text="🔙 Назад", callback_data="player_title_back")
+        builder.adjust(1)
         await state.update_data(player_of_month_users=users, player_of_month_page=0)
-        await message.answer(
-            player_of_month_page_title(users, 0),
-            reply_markup=telegram_player_of_month_keyboard(users, 0),
-        )
+        await message.answer("Выберите титул:", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_player_of_month)
     elif message.text == "🎙Назначить ведущего":
         games = fetch_active_games()
@@ -1771,10 +1777,32 @@ async def admin_player_of_month_page_handler(callback: types.CallbackQuery, stat
     state_data = await state.get_data()
     users = state_data.get("player_of_month_users") or fetch_club_members()
     current_page, _ = clamp_page(len(users), requested_page, PLAYER_OF_MONTH_PAGE_SIZE)
+    title_key = state_data.get("player_title_key", "month")
     await state.update_data(player_of_month_users=users, player_of_month_page=current_page)
     await callback.message.edit_text(
-        player_of_month_page_title(users, current_page),
+        f"Выберите обладателя титула «{PLAYER_TITLES[title_key]}» (страница {current_page + 1}/{max(1, (len(users) + PLAYER_OF_MONTH_PAGE_SIZE - 1) // PLAYER_OF_MONTH_PAGE_SIZE)}):",
         reply_markup=telegram_player_of_month_keyboard(users, current_page),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(Form.admin_player_of_month, F.data.startswith("player_title_"))
+async def admin_player_title_handler(callback: types.CallbackQuery, state: FSMContext):
+    title_key = callback.data.removeprefix("player_title_")
+    if title_key == "back":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("Вы вернулись в админ-меню.", reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+        await callback.answer()
+        return
+    if title_key not in PLAYER_TITLES:
+        await callback.answer("Титул не найден.", show_alert=True)
+        return
+    await state.update_data(player_title_key=title_key)
+    users = (await state.get_data()).get("player_of_month_users") or fetch_club_members()
+    await callback.message.edit_text(
+        f"Выберите обладателя титула «{PLAYER_TITLES[title_key]}» (страница 1/{max(1, (len(users) + PLAYER_OF_MONTH_PAGE_SIZE - 1) // PLAYER_OF_MONTH_PAGE_SIZE)}):",
+        reply_markup=telegram_player_of_month_keyboard(users, 0),
     )
     await callback.answer()
 
@@ -1790,14 +1818,15 @@ async def admin_player_of_month_select_handler(callback: types.CallbackQuery, st
     if not user:
         await callback.answer("Игрок не найден.", show_alert=True)
         return
-    set_player_of_month(user_id)
+    title_key = (await state.get_data()).get("player_title_key", "month")
+    set_player_of_month(user_id, title_key)
     display_name = user[2] or f"{user[0] or ''} {user[1] or ''}".strip() or f"ID {user_id}"
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(
-        f"👑 Игроком месяца назначен {display_name}.",
+        f"{PLAYER_TITLES[title_key]} назначен игрок {display_name}.",
         reply_markup=admin_menu_keyboard(),
     )
-    await callback.answer("Игрок месяца назначен")
+    await callback.answer("Титул назначен")
     await state.set_state(Form.admin_menu)
 
 
