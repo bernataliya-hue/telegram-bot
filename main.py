@@ -202,7 +202,12 @@ def fetch_club_members():
 def get_player_of_month_id():
     try:
         rows = execute_query(
-            "SELECT key, value FROM settings WHERE key = 'player_of_month' OR key LIKE 'player_title_%'",
+            """
+            SELECT key, value FROM settings
+            WHERE key IN ('player_of_month', 'player_title_month', 'player_title_mvp',
+                          'player_title_sheriff', 'player_title_don', 'player_title_red',
+                          'player_title_black')
+            """,
             fetch=True,
         )
     except Exception:
