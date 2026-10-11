@@ -2699,7 +2699,7 @@ async def admin_cancel_game_handler(message: types.Message, state: FSMContext):
         await message.answer("Вы вернулись в админ-меню", reply_markup=admin_menu_keyboard())
         await state.set_state(Form.admin_menu)
         return
-    result = execute_query("SELECT game_id, game_name, game_date FROM games WHERE game_date || ' ' || game_name = %s", (message.text,), fetchone=True)
+    result = find_game_by_label(message.text)
     if result:
         game_id = result[0]
         game_info = message.text
