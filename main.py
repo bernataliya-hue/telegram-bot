@@ -2843,10 +2843,31 @@ async def admin_reminder_audience_handler(message: types.Message, state: FSMCont
         rows = execute_query("SELECT user_id FROM users", fetch=True)
         target_users = [r[0] for r in rows]
     elif message.text == "✅Только записавшимся":
-        rows = execute_query("SELECT DISTINCT user_id FROM registrations WHERE game_id = ANY(%s) AND status = 'registered'", (game_ids,), fetch=True)
+        rows = execute_query(
+            """
+            SELECT user_id FROM registrations
+            WHERE game_id = ANY(%s) AND status = 'registered'
+            UNION
+            SELECT user_id FROM thinking_players WHERE game_id = ANY(%s)
+            """,
+            (game_ids, game_ids),
+            fetch=True,
+        )
         target_users = [r[0] for r in rows]
     elif message.text == "❌Только не записавшимся":
-        rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = ANY(%s) AND status = 'registered')", (game_ids,), fetch=True)
+        rows = execute_query(
+            """
+            SELECT user_id FROM users
+            WHERE user_id NOT IN (
+                SELECT user_id FROM registrations
+                WHERE game_id = ANY(%s) AND status IN ('registered', 'declined')
+                UNION
+                SELECT user_id FROM thinking_players WHERE game_id = ANY(%s)
+            )
+            """,
+            (game_ids, game_ids),
+            fetch=True,
+        )
         target_users = [r[0] for r in rows]
     elif message.text == "🤔Думающим игрокам":
         rows = execute_query("SELECT DISTINCT user_id FROM thinking_players WHERE game_id = ANY(%s)", (game_ids,), fetch=True)
@@ -4058,10 +4079,31 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             rows = execute_query("SELECT user_id FROM users", fetch=True)
             target_users = [r[0] for r in rows]
         elif normalized_text == "✅Только записавшимся" or audience == "registered":
-            rows = execute_query("SELECT DISTINCT user_id FROM registrations WHERE game_id = ANY(%s) AND status = 'registered'", (game_ids,), fetch=True)
+            rows = execute_query(
+                """
+                SELECT user_id FROM registrations
+                WHERE game_id = ANY(%s) AND status = 'registered'
+                UNION
+                SELECT user_id FROM thinking_players WHERE game_id = ANY(%s)
+                """,
+                (game_ids, game_ids),
+                fetch=True,
+            )
             target_users = [r[0] for r in rows]
         elif normalized_text == "❌Только не записавшимся" or audience == "not_registered":
-            rows = execute_query("SELECT user_id FROM users WHERE user_id NOT IN (SELECT user_id FROM registrations WHERE game_id = ANY(%s) AND status = 'registered')", (game_ids,), fetch=True)
+            rows = execute_query(
+                """
+                SELECT user_id FROM users
+                WHERE user_id NOT IN (
+                    SELECT user_id FROM registrations
+                    WHERE game_id = ANY(%s) AND status IN ('registered', 'declined')
+                    UNION
+                    SELECT user_id FROM thinking_players WHERE game_id = ANY(%s)
+                )
+                """,
+                (game_ids, game_ids),
+                fetch=True,
+            )
             target_users = [r[0] for r in rows]
         elif normalized_text == "🤔Думающим игрокам" or audience == "thinking":
             rows = execute_query("SELECT DISTINCT user_id FROM thinking_players WHERE game_id = ANY(%s)", (game_ids,), fetch=True)
