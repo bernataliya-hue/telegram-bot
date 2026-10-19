@@ -435,6 +435,9 @@ def fetch_active_games(include_deleted: bool = False):
 def fetch_upcoming_games():
     return sort_games_by_date(filter_upcoming_games(fetch_active_games()))
 
+def limit_registerable_games(games, is_admin: bool = False):
+    return games if is_admin else games[:5]
+
 
 def fetch_schedule_games(is_admin: bool = False):
     """Return the games shown in the schedule for the current role."""
@@ -2141,6 +2144,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
                 SELECT 1 FROM registrations r WHERE r.game_id=g.game_id AND r.user_id=%s AND r.status='registered'
             )
         """, (user_id,), fetch=True)))
+        games = limit_registerable_games(games, is_telegram_admin(message.from_user.id))
         if not games:
             await message.answer("К сожалению, на данный момент игр для записи нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -4465,6 +4469,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
     if normalized_text == "📝Записаться на игру" or command == "register":
         games = fetch_upcoming_games()
         games = [game for game in games if not execute_query("SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s AND status='registered'", (internal_user_id, game[0]), fetchone=True)]
+        games = limit_registerable_games(games, vk_user_id == VK_ADMIN_ID)
         send_vk_games_list(vk_user_id, games, "vk_register_select", "Выбери игру для записи:", use_game_buttons=True)
         return
 
