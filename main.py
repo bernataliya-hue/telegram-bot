@@ -436,18 +436,6 @@ def fetch_upcoming_games():
     return sort_games_by_date(filter_upcoming_games(fetch_active_games()))
 
 
-def fetch_schedule_games(is_admin: bool = False):
-    """Return the games shown in the schedule for the current role."""
-    games = fetch_active_games()
-    upcoming = [game for game in games if is_upcoming_game(game[2])]
-    if not is_admin:
-        return upcoming[:5]
-
-    today = datetime.date.today()
-    past = [game for game in games if (parse_game_date(game[2]) or today) < today]
-    return (past[-1:] + upcoming)
-
-
 def get_game_host_id(game_id: int):
     row = execute_query(
         """
@@ -2180,8 +2168,10 @@ async def menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Запись на какую игру ты хочешь отменить?", reply_markup=builder.as_markup())
         await state.set_state(Form.menu)
     elif message.text == "📅Расписание игр":
-        schedule_games = fetch_schedule_games(is_telegram_admin(message.from_user.id))
-        games = [(name, date) for _, name, date, *_ in schedule_games]
+        games = sort_games_by_date(
+            [g for g in execute_query("SELECT game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True) if is_upcoming_game(g[1])],
+            date_index=1
+        )
         if not games:
             await message.answer("<b>Расписание ближайших игр:</b>\n\nИгр пока не запланировано.", parse_mode="HTML")
             return
@@ -4493,7 +4483,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if normalized_text == "📅Расписание игр" or command == "schedule":
-        games = fetch_schedule_games(vk_user_id == VK_ADMIN_ID)
+        games = fetch_upcoming_games()
         if not games:
             send_vk_message(vk_user_id, "Игр пока не запланировано.", vk_main_menu_keyboard(internal_user_id))
             return
