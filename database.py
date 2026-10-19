@@ -1,6 +1,7 @@
 import os
 import time
 import psycopg2
+from psycopg2.extras import Json
 import datetime
 import logging
 from game_dates import parse_date, stored_game_date
@@ -35,13 +36,16 @@ def init_db():
         mafia_nick TEXT,
         age INTEGER,
         telegram_username TEXT,
-        vk_username TEXT
+        vk_username TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
     cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'telegram'")
     cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_user_id BIGINT")
     cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vk_username TEXT")
+    # Existing profiles receive the migration timestamp once; new profiles use the default.
+    cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP")
     cursor.execute("""
         CREATE SEQUENCE IF NOT EXISTS manual_user_ids AS BIGINT
         INCREMENT BY -1 MINVALUE -9223372036854775808
@@ -113,6 +117,20 @@ def init_db():
     """)
     cursor.execute("INSERT INTO settings (key, value) VALUES ('schedule', 'Расписание пока не установлено') ON CONFLICT (key) DO NOTHING")
     cursor.execute("INSERT INTO settings (key, value) VALUES ('player_of_month', '') ON CONFLICT (key) DO NOTHING")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS archived_players (
+            archive_id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            player_data JSONB NOT NULL,
+            registrations JSONB NOT NULL,
+            thinking_players JSONB NOT NULL,
+            late_players JSONB NOT NULL,
+            game_hosts JSONB NOT NULL,
+            player_titles JSONB NOT NULL DEFAULT '{}'::jsonb,
+            archived_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+        )
+    """)
+    cursor.execute("ALTER TABLE archived_players ADD COLUMN IF NOT EXISTS player_titles JSONB NOT NULL DEFAULT '{}'::jsonb")
     # Legacy rows contain no recoverable year. Freeze their previous interpretation
     # at upgrade time, so they cannot become upcoming again next January.
     cursor.execute(
@@ -144,3 +162,97 @@ def init_db():
     cursor.close()
     conn.close()
     return legacy_year
+
+
+def delete_inactive_players():
+    """Archive and delete players inactive for more than three months."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT u.user_id, to_jsonb(u)
+            FROM users u
+            LEFT JOIN (
+                SELECT user_id, MAX(registered_at) AS last_registered_at
+                FROM registrations GROUP BY user_id
+            ) r USING (user_id)
+            WHERE COALESCE(r.last_registered_at, u.created_at)
+                  < clock_timestamp() - INTERVAL '3 months'
+            FOR UPDATE OF u
+        """)
+        stale = cursor.fetchall()
+        archived = []
+        for user_id, player_data in stale:
+            relations = {}
+            for table in ("registrations", "thinking_players", "late_players", "game_hosts"):
+                cursor.execute(
+                    f"SELECT COALESCE(jsonb_agg(to_jsonb(t)), '[]'::jsonb) FROM {table} t WHERE user_id = %s",
+                    (user_id,),
+                )
+                relations[table] = cursor.fetchone()[0]
+            cursor.execute("""
+                INSERT INTO archived_players
+                    (user_id, player_data, registrations, thinking_players, late_players, game_hosts, player_titles)
+                VALUES (%s, %s, %s, %s, %s, %s,
+                    COALESCE((SELECT jsonb_object_agg(key, value) FROM settings
+                              WHERE key IN ('player_of_month', 'player_title_month', 'player_title_mvp',
+                                            'player_title_sheriff', 'player_title_don', 'player_title_red',
+                                            'player_title_black') AND value = %s), '{}'::jsonb))
+                RETURNING archive_id
+            """, (user_id, Json(player_data), *(Json(relations[t]) for t in ("registrations", "thinking_players", "late_players", "game_hosts")), str(user_id)))
+            archive_id = cursor.fetchone()[0]
+            archived.append((archive_id, user_id, player_data.get("first_name"), player_data.get("last_name"), player_data.get("mafia_nick")))
+            for table in ("registrations", "thinking_players", "late_players", "game_hosts"):
+                cursor.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
+            cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+            cursor.execute("DELETE FROM settings WHERE key IN ('player_of_month', 'player_title_month', 'player_title_mvp', 'player_title_sheriff', 'player_title_don', 'player_title_red', 'player_title_black') AND value = %s", (str(user_id),))
+        conn.commit()
+        return archived
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_archived_players():
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT archive_id, user_id, player_data->>'first_name', player_data->>'last_name', player_data->>'mafia_nick' FROM archived_players ORDER BY archived_at DESC, archive_id DESC")
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def restore_archived_player(archive_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT user_id, player_data, registrations, thinking_players, late_players, game_hosts, player_titles FROM archived_players WHERE archive_id = %s FOR UPDATE", (archive_id,))
+        archived = cursor.fetchone()
+        if not archived:
+            conn.commit()
+            return None
+        user_id, player_data, *row_data = archived
+        relations, player_titles = row_data[:-1], row_data[-1]
+        cursor.execute("INSERT INTO users SELECT (jsonb_populate_record(NULL::users, %s)).* ON CONFLICT (user_id) DO NOTHING", (Json(player_data),))
+        for table, rows in zip(("registrations", "thinking_players", "late_players", "game_hosts"), relations):
+            cursor.execute(f"INSERT INTO {table} SELECT * FROM jsonb_populate_recordset(NULL::{table}, %s) ON CONFLICT DO NOTHING", (Json(rows),))
+        if player_titles:
+            cursor.execute("""
+                INSERT INTO settings (key, value)
+                SELECT key, value FROM jsonb_each_text(%s)
+                ON CONFLICT (key) DO NOTHING
+            """, (Json(player_titles),))
+        cursor.execute("DELETE FROM archived_players WHERE archive_id = %s", (archive_id,))
+        conn.commit()
+        return user_id, player_data.get("first_name"), player_data.get("last_name"), player_data.get("mafia_nick")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
