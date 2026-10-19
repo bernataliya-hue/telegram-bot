@@ -1,4 +1,4 @@
-from reminder_formatting import format_reminder_game_date
+from reminder_formatting import format_reminder_game_date, game_week_phrase
 
 
 def format_announcement(games, game_rules, cost_info) -> str:
@@ -18,7 +18,7 @@ def format_announcement(games, game_rules, cost_info) -> str:
     costs_text = " ".join(cost_lines)
     return (
         "Всем привет! 👋\n"
-        "На следующей неделе играем в мафию!\n\n"
+        f"{game_week_phrase(games[0][2]) if games else 'На следующей неделе играем'} в мафию!\n\n"
         f"{games_text}\n\n"
         f"💵{costs_text} 💵\n\n"
         "🎁 Если ты первый раз в Тайной Комнате - тебе скидка 200 руб.\n"
