@@ -34,6 +34,7 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 from aiogram_calendar.schemas import SimpleCalAct
 import datetime
+from zoneinfo import ZoneInfo
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
@@ -127,6 +128,29 @@ def execute_query(query, params=(), fetch=False, fetchone=False):
     finally:
         cursor.close()
         conn.close()
+
+
+def seconds_until_monthly_player_cleanup():
+    now = datetime.datetime.now(ZoneInfo("Europe/Moscow"))
+    target = now.replace(day=1, hour=0, minute=5, second=0, microsecond=0)
+    if now >= target:
+        if now.day == 1:
+            return 0
+        target = target.replace(year=target.year + (target.month == 12), month=(target.month % 12) + 1)
+    return max(0, (target - now).total_seconds())
+
+
+async def monthly_player_cleanup():
+    while True:
+        await asyncio.sleep(seconds_until_monthly_player_cleanup())
+        try:
+            deleted = await asyncio.to_thread(database.delete_inactive_players)
+            if deleted:
+                names = "\n".join(f"• {p[2] or ''} {p[3] or ''} ({p[4] or 'ник не указан'}) · ID {p[1]}" for p in deleted)
+                await notify_admin(f"🧹 Ежемесячно удалены неактивные игроки:\n{names}")
+            logging.info("Ежемесячная очистка игроков: удалено %s", len(deleted))
+        except Exception:
+            logging.exception("Не удалось выполнить ежемесячную очистку игроков")
 
 
 def make_internal_user_id(platform: str, platform_user_id: int) -> int:
@@ -634,6 +658,7 @@ class Form(StatesGroup):
     admin_player_of_month = State()
     admin_assign_host_game = State()
     admin_assign_host_player = State()
+    admin_restore_players = State()
 
 # Главное меню
 def main_menu_keyboard(user_id):
@@ -664,9 +689,33 @@ def admin_menu_keyboard():
     builder.button(text="🏆Титулы игроков")
     builder.button(text="🎙Назначить ведущего")
     builder.button(text="✍️Ручная запись игрока")
+    builder.button(text="🧹Удалить неактивных игроков")
+    builder.button(text="♻️Восстановить игрока")
     builder.button(text="🏠Главное меню")
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
+
+
+@dp.callback_query(Form.admin_restore_players, F.data.startswith("restore_player_"))
+async def restore_archived_player_callback(callback: types.CallbackQuery, state: FSMContext):
+    if not is_telegram_admin(callback.from_user.id):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    if callback.data == "restore_player_back":
+        await state.set_state(Form.admin_menu)
+        await callback.message.edit_text("Возвращаюсь в админ-меню.")
+        await callback.message.answer("Админ-меню", reply_markup=admin_menu_keyboard())
+        await callback.answer()
+        return
+    archive_id = int(callback.data.rsplit("_", 1)[1])
+    player = await asyncio.to_thread(database.restore_archived_player, archive_id)
+    if not player:
+        await callback.answer("Игрок уже восстановлен или удалён из архива.", show_alert=True)
+        return
+    _, first, last, nick = player
+    await callback.message.edit_text(f"Игрок восстановлен: {first or ''} {last or ''} ({nick or 'без ника'}).")
+    await callback.answer("Восстановлено")
+    await state.set_state(Form.admin_menu)
 
 
 def vk_main_menu_keyboard(user_id: int = None):
@@ -700,6 +749,9 @@ def vk_admin_menu_keyboard():
     keyboard.add_button("🔔Напомнить об игре", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_reminder"})
     keyboard.add_line()
     keyboard.add_button("📢Рассылка", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_broadcast"})
+    keyboard.add_line()
+    keyboard.add_button("🧹Удалить неактивных", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_cleanup_players"})
+    keyboard.add_button("♻️Восстановить игрока", color=VkKeyboardColor.SECONDARY, payload={"command": "admin_restore_player"})
     keyboard.add_line()
     keyboard.add_button("🏠Главное меню", color=VkKeyboardColor.SECONDARY, payload={"command": "main_menu"})
     return keyboard.get_keyboard()
@@ -1310,7 +1362,24 @@ async def admin_game_choice_callback(callback: types.CallbackQuery, state: FSMCo
 
 @dp.message(Form.admin_menu)
 async def admin_menu_handler(message: types.Message, state: FSMContext):
-    if message.text == "➕Добавить игру":
+    if message.text == "♻️Восстановить игрока":
+        players = await asyncio.to_thread(database.get_archived_players)
+        if not players:
+            await message.answer("Архив удалённых игроков пуст.", reply_markup=admin_menu_keyboard())
+            return
+        builder = InlineKeyboardBuilder()
+        for archive_id, user_id, first, last, nick in players:
+            builder.button(text=f"{first or ''} {last or ''} ({nick or 'без ника'}) · ID {user_id}", callback_data=f"restore_player_{archive_id}")
+        builder.button(text="🔙Назад", callback_data="restore_player_back")
+        builder.adjust(1)
+        await message.answer("Выберите игрока для восстановления:", reply_markup=builder.as_markup())
+        await state.set_state(Form.admin_restore_players)
+    elif message.text == "🧹Удалить неактивных игроков":
+        deleted = await asyncio.to_thread(database.delete_inactive_players)
+        summary = "\n".join(f"• {p[2] or ''} {p[3] or ''} ({p[4] or 'ник не указан'}) · ID {p[1]}" for p in deleted)
+        await message.answer((f"Удалены игроки:\n{summary}" if deleted else "Неактивных игроков для удаления нет."), reply_markup=admin_menu_keyboard())
+        await state.set_state(Form.admin_menu)
+    elif message.text == "➕Добавить игру":
         await message.answer(
             "Введите дату игры цифрами в формате ДД.ММ или ДД.ММ.ГГГГ.\n"
             "Например: 27.03 или 27.03.2026"
@@ -3897,6 +3966,8 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
     audience = payload.get("audience")
     is_admin = vk_user_id == VK_ADMIN_ID
     admin_commands = {
+        "admin_cleanup_players",
+        "admin_restore_player",
         "admin_panel",
         "admin_add_game",
         "admin_delete_game",
@@ -3909,6 +3980,8 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
         "main_menu",
     }
     admin_labels = {
+        "🧹Удалить неактивных",
+        "♻️Восстановить игрока",
         "⚙️Админ-панель",
         "➕Добавить игру",
         "❌Удалить игру",
@@ -3928,6 +4001,47 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
     if not is_admin:
         clear_vk_state(internal_user_id)
         send_vk_message(vk_user_id, "У тебя нет доступа к админ-меню.", vk_main_menu_keyboard(internal_user_id))
+        return True
+
+
+    if command == "admin_cleanup_players" or normalized_text == "🧹Удалить неактивных":
+        deleted = await asyncio.to_thread(database.delete_inactive_players)
+        if deleted:
+            names = "\\n".join(f"• {p[2] or ''} {p[3] or ''} ({p[4] or 'ник не указан'}) · ID {p[1]}" for p in deleted)
+            await notify_admin(f"🧹 Удалены неактивные игроки:\\n{names}")
+            reply = f"Удалены игроки:\\n{names}"
+        else:
+            reply = "Неактивных игроков для удаления нет."
+        clear_vk_state(internal_user_id)
+        send_vk_message(vk_user_id, reply, vk_admin_menu_keyboard())
+        return True
+
+    if command == "admin_restore_player" or normalized_text == "♻️Восстановить игрока":
+        players = await asyncio.to_thread(database.get_archived_players)
+        if not players:
+            send_vk_message(vk_user_id, "Архив удалённых игроков пуст.", vk_admin_menu_keyboard())
+            return True
+        lines = ["Выберите игрока для восстановления:"]
+        lines.extend(f"{index}. {first or ''} {last or ''} ({nick or 'без ника'}) · ID {user_id}" for index, (_, user_id, first, last, nick) in enumerate(players, 1))
+        set_vk_state(internal_user_id, "admin_restore_player_choice", archived_players=players)
+        send_vk_message(vk_user_id, "\\n".join(lines), vk_number_choice_keyboard(len(players)))
+        return True
+
+    if current == "admin_restore_player_choice":
+        players = state.get("archived_players", [])
+        try:
+            index = int(payload["select_index"]) if "select_index" in payload else int(normalized_text) - 1
+        except (TypeError, ValueError):
+            index = -1
+        if index < 0 or index >= len(players):
+            send_vk_message(vk_user_id, "Выберите игрока кнопкой с его номером.", vk_number_choice_keyboard(len(players)))
+            return True
+        restored = await asyncio.to_thread(database.restore_archived_player, players[index][0])
+        clear_vk_state(internal_user_id)
+        if restored:
+            send_vk_message(vk_user_id, f"Игрок восстановлен: {restored[1] or ''} {restored[2] or ''} ({restored[3] or 'без ника'}).", vk_admin_menu_keyboard())
+        else:
+            send_vk_message(vk_user_id, "Игрок уже восстановлен.", vk_admin_menu_keyboard())
         return True
 
     if command == "admin_add_game":
@@ -4807,6 +4921,7 @@ def vk_polling_loop(loop: asyncio.AbstractEventLoop):
 
 async def main():
     vk_thread = None
+    cleanup_task = asyncio.create_task(monthly_player_cleanup())
     try:
         if DISABLE_TELEGRAM_POLLING:
             logging.warning(
@@ -4828,6 +4943,11 @@ async def main():
             # Оставляем pending updates, чтобы пользователям не приходилось заново нажимать кнопки после деплоя
             await dp.start_polling(bot, skip_updates=False)
     finally:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
         await bot.session.close()
 
 if __name__ == "__main__":
