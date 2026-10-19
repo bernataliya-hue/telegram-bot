@@ -18,7 +18,7 @@ from game_editing import (
     schedule_change_recipients,
 )
 from announcement_formatting import format_announcement
-from reminder_formatting import format_reminder_game_date
+from reminder_formatting import format_reminder_game_date, game_week_phrase
 from player_of_month import PLAYER_TITLES, clamp_page, decorate_player_of_month
 from game_hosting import add_host_label, order_with_host_first, participant_number
 from club_members import format_club_member_label
@@ -2952,15 +2952,17 @@ async def send_game_reminders(user_ids, game_ids):
             continue
         try:
             platform = detect_platform_by_user_id(uid)
-            if platform == PLATFORM_TELEGRAM:
-                await bot.send_message(
-                    get_platform_user_id(uid),
-                    "🔔 Привет! На этой неделе играем в мафию:",
-                )
-            else:
-                await send_text_to_user(uid, "🔔 Привет! На этой неделе играем в мафию:")
-
+            previous_week_phrase = None
             for game_id, g_name, g_date in games:
+                week_phrase = game_week_phrase(g_date)
+                if week_phrase != previous_week_phrase:
+                    intro = f"🔔 Привет! {week_phrase} в мафию:"
+                    if platform == PLATFORM_TELEGRAM:
+                        await bot.send_message(get_platform_user_id(uid), intro)
+                    else:
+                        await send_text_to_user(uid, intro)
+                    previous_week_phrase = week_phrase
+
                 registration = execute_query(
                     "SELECT status FROM registrations WHERE user_id=%s AND game_id=%s",
                     (uid, game_id), fetchone=True,
