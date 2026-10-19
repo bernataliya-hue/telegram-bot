@@ -174,7 +174,7 @@ def delete_inactive_players():
             FROM users u
             LEFT JOIN (
                 SELECT user_id, MAX(registered_at) AS last_registered_at
-                FROM registrations GROUP BY user_id
+                FROM registrations WHERE status = 'registered' GROUP BY user_id
             ) r USING (user_id)
             WHERE COALESCE(r.last_registered_at, u.created_at)
                   < clock_timestamp() - INTERVAL '3 months'
