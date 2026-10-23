@@ -223,16 +223,18 @@ def fetch_club_members():
     )
 
 
-def get_player_of_month_id():
+def get_player_of_month_id(game_id: int = None):
     try:
         rows = execute_query(
             """
             SELECT key, value FROM settings
             WHERE key IN ('player_of_month', 'player_title_month', 'player_title_mvp',
                           'player_title_sheriff', 'player_title_don', 'player_title_red',
-                          'player_title_black', 'player_title_table_savior')
+                          'player_title_black')
+               OR (%s IS NOT NULL AND key = %s)
             """,
-            fetch=True,
+            (f"player_title_table_savior_game_{game_id}" if game_id is not None else None,
+             f"player_title_table_savior_game_{game_id}" if game_id is not None else None), fetch=True,
         )
     except Exception:
         # Award badges are optional; a settings lookup must not hide participant lists.
@@ -241,6 +243,8 @@ def get_player_of_month_id():
     holders = {}
     for key, value in rows or []:
         title_key = "month" if key == "player_of_month" else key.removeprefix("player_title_")
+        if title_key.startswith("table_savior_game_"):
+            title_key = "table_savior"
         if title_key not in PLAYER_TITLES or not value:
             continue
         try:
@@ -250,8 +254,13 @@ def get_player_of_month_id():
     return holders
 
 
-def set_player_of_month(user_id: int, title_key: str = "month"):
-    setting_key = "player_of_month" if title_key == "month" else f"player_title_{title_key}"
+def set_player_of_month(user_id: int, title_key: str = "month", game_id: int = None):
+    if title_key == "table_savior":
+        if game_id is None:
+            raise ValueError("Для титула спасителя стола нужна игра")
+        setting_key = f"player_title_table_savior_game_{game_id}"
+    else:
+        setting_key = "player_of_month" if title_key == "month" else f"player_title_{title_key}"
     execute_query(
         """
         INSERT INTO settings (key, value) VALUES (%s, %s)
@@ -501,7 +510,7 @@ async def format_user_participants_async(game_id: int, title: str) -> str:
     )
     thinking_users = set(await get_thinking(game_id))
     late_users = set(await get_late_players(game_id))
-    player_of_month_id = get_player_of_month_id()
+    player_of_month_id = get_player_of_month_id(game_id)
     host_user_id = get_game_host_id(game_id)
 
     if not participants and not thinking_users:
@@ -564,7 +573,7 @@ async def format_admin_participants_with_format(game_id: int, title: str, partic
     )
     thinking_users = set(await get_thinking(game_id))
     late_users = set(await get_late_players(game_id))
-    player_of_month_id = get_player_of_month_id()
+    player_of_month_id = get_player_of_month_id(game_id)
     host_user_id = get_game_host_id(game_id)
 
     if not participants and not thinking_users:
@@ -1904,6 +1913,20 @@ async def admin_player_of_month_select_handler(callback: types.CallbackQuery, st
         await callback.answer("Игрок не найден.", show_alert=True)
         return
     title_key = (await state.get_data()).get("player_title_key", "month")
+    if title_key == "table_savior":
+        games = fetch_active_games()
+        if not games:
+            await callback.answer("Нет доступных игр.", show_alert=True)
+            return
+        await state.update_data(player_title_user_id=user_id)
+        builder = InlineKeyboardBuilder()
+        for game_id, name, date in games:
+            builder.button(text=f"{display_game_date(date)} {name}", callback_data=f"savior_game_select_{game_id}")
+        builder.button(text="🔙 Назад", callback_data="savior_game_back")
+        builder.adjust(1)
+        await callback.message.edit_text("Выберите игру, для которой действует титул:", reply_markup=builder.as_markup())
+        await callback.answer()
+        return
     set_player_of_month(user_id, title_key)
     display_name = user[2] or f"{user[0] or ''} {user[1] or ''}".strip() or f"ID {user_id}"
     try:
@@ -1915,6 +1938,41 @@ async def admin_player_of_month_select_handler(callback: types.CallbackQuery, st
         f"{PLAYER_TITLES[title_key]} назначен игрок {display_name}.",
         reply_markup=admin_menu_keyboard(),
     )
+    await callback.answer("Титул назначен")
+    await state.set_state(Form.admin_menu)
+
+
+@dp.callback_query(Form.admin_player_of_month, F.data.startswith("savior_game_"))
+async def admin_table_savior_game_handler(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "savior_game_back":
+        state_data = await state.get_data()
+        users = state_data.get("player_of_month_users") or fetch_club_members()
+        await callback.message.edit_text(
+            f"Выберите обладателя титула «{PLAYER_TITLES['table_savior']}» (страница 1/{max(1, (len(users) + PLAYER_OF_MONTH_PAGE_SIZE - 1) // PLAYER_OF_MONTH_PAGE_SIZE)}):",
+            reply_markup=telegram_player_of_month_keyboard(users, 0),
+        )
+        await callback.answer()
+        return
+    try:
+        game_id = int(callback.data.removeprefix("savior_game_select_"))
+    except ValueError:
+        await callback.answer("Игра не найдена.", show_alert=True)
+        return
+    state_data = await state.get_data()
+    user_id = state_data.get("player_title_user_id")
+    game = execute_query("SELECT game_name, game_date FROM games WHERE game_id = %s AND is_deleted = FALSE", (game_id,), fetchone=True)
+    user = execute_query("SELECT first_name, last_name, mafia_nick FROM users WHERE user_id = %s", (user_id,), fetchone=True) if user_id else None
+    if not game or not user:
+        await callback.answer("Игрок или игра не найдены.", show_alert=True)
+        return
+    set_player_of_month(user_id, "table_savior", game_id)
+    display_name = user[2] or f"{user[0] or ''} {user[1] or ''}".strip() or f"ID {user_id}"
+    try:
+        await send_text_to_user(user_id, f"🎉 Поздравляем! Тебе присвоен титул «{PLAYER_TITLES['table_savior']}» на игру {build_game_title(game[0], game[1])}.")
+    except Exception as exc:
+        logging.warning("Не удалось уведомить игрока %s о присвоении титула: %s", user_id, exc)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(f"{PLAYER_TITLES['table_savior']} назначен игроку {display_name} на игру {build_game_title(game[0], game[1])}.", reply_markup=admin_menu_keyboard())
     await callback.answer("Титул назначен")
     await state.set_state(Form.admin_menu)
 
@@ -2265,6 +2323,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
         )
     elif message.text == "👥Список участников":
         games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
+        games = games[:5]
         if not games:
             await message.answer("К сожалению, на данный момент игр нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -2379,7 +2438,7 @@ async def user_view_participants_handler(message: types.Message, state: FSMConte
         thinking_users = await get_thinking(game_id)
         thinking_users = set(map(int, thinking_users))
         late_users = await get_late_players(game_id)
-        player_of_month_id = get_player_of_month_id()
+        player_of_month_id = get_player_of_month_id(game_id)
 
         if not participants and not thinking_users:
             await message.answer(f"На игру {message.text} пока никто не записался.", reply_markup=main_menu_keyboard(message.from_user.id))

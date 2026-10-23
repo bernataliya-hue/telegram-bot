@@ -195,9 +195,10 @@ def delete_inactive_players():
                     (user_id, player_data, registrations, thinking_players, late_players, game_hosts, player_titles)
                 VALUES (%s, %s, %s, %s, %s, %s,
                     COALESCE((SELECT jsonb_object_agg(key, value) FROM settings
-                              WHERE key IN ('player_of_month', 'player_title_month', 'player_title_mvp',
+                              WHERE (key IN ('player_of_month', 'player_title_month', 'player_title_mvp',
                                             'player_title_sheriff', 'player_title_don', 'player_title_red',
-                                            'player_title_black', 'player_title_table_savior') AND value = %s), '{}'::jsonb))
+                                            'player_title_black', 'player_title_table_savior')
+                                     OR key LIKE 'player_title_table_savior_game_%%') AND value = %s), '{}'::jsonb))
                 RETURNING archive_id
             """, (user_id, Json(player_data), *(Json(relations[t]) for t in ("registrations", "thinking_players", "late_players", "game_hosts")), str(user_id)))
             archive_id = cursor.fetchone()[0]
@@ -205,7 +206,7 @@ def delete_inactive_players():
             for table in ("registrations", "thinking_players", "late_players", "game_hosts"):
                 cursor.execute(f"DELETE FROM {table} WHERE user_id = %s", (user_id,))
             cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
-            cursor.execute("DELETE FROM settings WHERE key IN ('player_of_month', 'player_title_month', 'player_title_mvp', 'player_title_sheriff', 'player_title_don', 'player_title_red', 'player_title_black', 'player_title_table_savior') AND value = %s", (str(user_id),))
+            cursor.execute("DELETE FROM settings WHERE (key IN ('player_of_month', 'player_title_month', 'player_title_mvp', 'player_title_sheriff', 'player_title_don', 'player_title_red', 'player_title_black', 'player_title_table_savior') OR key LIKE 'player_title_table_savior_game_%%') AND value = %s", (str(user_id),))
         conn.commit()
         return archived
     except Exception:
