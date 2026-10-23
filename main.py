@@ -230,7 +230,7 @@ def get_player_of_month_id():
             SELECT key, value FROM settings
             WHERE key IN ('player_of_month', 'player_title_month', 'player_title_mvp',
                           'player_title_sheriff', 'player_title_don', 'player_title_red',
-                          'player_title_black')
+                          'player_title_black', 'player_title_table_savior')
             """,
             fetch=True,
         )
