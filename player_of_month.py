@@ -5,6 +5,7 @@ PLAYER_TITLES = {
     "don": "💍 Лучший дон",
     "red": "♥️ Лучший красный",
     "black": "🖤 Лучший чёрный",
+    "table_savior": "Спаситель стола🌈",
 }
 PLAYER_OF_MONTH_BADGE = PLAYER_TITLES["month"]
 
