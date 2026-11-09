@@ -468,8 +468,15 @@ def fetch_active_games(include_deleted: bool = False):
 def fetch_upcoming_games():
     return sort_games_by_date(filter_upcoming_games(fetch_active_games()))
 
+def fetch_admin_games():
+    """All upcoming games plus the most recent past game, if any."""
+    games = fetch_active_games()
+    upcoming = filter_upcoming_games(games)
+    past = [game for game in games if not is_upcoming_game(game[2])]
+    return sort_games_by_date(([past[-1]] if past else []) + upcoming)
+
 def limit_registration_games(games, is_admin: bool = False):
-    return games if is_admin else games[:5]
+    return games[:5]
 
 
 def get_game_host_id(game_id: int):
@@ -1395,9 +1402,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         )
         await state.set_state(Form.add_game_date)
     elif message.text == "✏️Изменить игру":
-        games = sort_games_by_date(execute_query(
-            "SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True
-        ))
+        games = fetch_admin_games()
         if not games:
             await message.answer("Список активных игр пуст.")
             return
@@ -1409,7 +1414,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Какую игру изменить?", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_edit_game)
     elif message.text == "❌Удалить игру":
-        games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
+        games = fetch_admin_games()
         if not games:
             await message.answer("Список активных игр пуст.")
             return
@@ -1433,7 +1438,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Какую игру восстановить?", reply_markup=builder.as_markup())
         await state.set_state(Form.restore_game)
     elif message.text == "👥Список участников":
-        games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
+        games = fetch_admin_games()
         if not games:
             await message.answer("Список игр пуст.")
             return
@@ -1470,7 +1475,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Выберите титул:", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_player_of_month)
     elif message.text == "🎙Назначить ведущего":
-        games = fetch_active_games()
+        games = fetch_admin_games()
         if not games:
             await message.answer("Нет доступных игр.", reply_markup=admin_menu_keyboard())
             return
@@ -1482,10 +1487,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Выберите игру:", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_assign_host_game)
     elif message.text == "✍️Ручная запись игрока":
-        games = sort_games_by_date(filter_upcoming_games(execute_query(
-            "SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE",
-            fetch=True
-        )))
+        games = fetch_admin_games()
         if not games:
             await message.answer("Нет доступных игр для ручной записи.")
             return
@@ -1497,7 +1499,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Выберите игру для ручной записи:", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_manual_register_game)
     elif message.text == "🚫Отмена игры":
-        games = sort_games_by_date(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True))
+        games = fetch_admin_games()
         if not games:
             await message.answer("Список игр пуст.")
             return
@@ -1509,7 +1511,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         await message.answer("Выберите игру для отмены и уведомления игроков:", reply_markup=builder.as_markup())
         await state.set_state(Form.admin_cancel_game)
     elif message.text == "🔔Напомнить об игре":
-        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
+        games = fetch_admin_games()
         if not games:
             await message.answer("Список игр пуст.")
             return
@@ -1520,7 +1522,7 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         )
         await state.set_state(Form.admin_reminder)
     elif message.text == "📣Получить анонс":
-        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
+        games = fetch_admin_games()
         if not games:
             await message.answer("Список игр пуст.")
             return
@@ -2253,13 +2255,13 @@ async def admin_manual_register_action_handler(message: types.Message, state: FS
 async def menu_handler(message: types.Message, state: FSMContext):
     if message.text == "📝Записаться на игру":
         user_id = telegram_internal_user_id(message.from_user)
-        games = sort_games_by_date(filter_upcoming_games(execute_query("""
-            SELECT g.game_id, g.game_name, g.game_date FROM games g
-            WHERE g.is_deleted = FALSE AND NOT EXISTS (
-                SELECT 1 FROM registrations r WHERE r.game_id=g.game_id AND r.user_id=%s AND r.status='registered'
+        games = limit_registration_games(fetch_upcoming_games())
+        registered_game_ids = {
+            row[0] for row in execute_query(
+                "SELECT game_id FROM registrations WHERE user_id=%s AND status='registered' AND game_id = ANY(%s)",
+                (user_id, [game[0] for game in games]), fetch=True
             )
-        """, (user_id,), fetch=True)))
-        games = limit_registration_games(games, is_telegram_admin(message.from_user.id))
+        } if games else set()
         if not games:
             await message.answer("К сожалению, на данный момент игр для записи нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -2269,7 +2271,8 @@ async def menu_handler(message: types.Message, state: FSMContext):
             display_name = name
             if "Спортивная мафия" in name and "🌃" not in name:
                 display_name = name.replace("🏆", "🌃")
-            builder.button(text=f"📆{display_game_date(date)} {display_name}", callback_data=f"reg_{game_id}")
+            registered_mark = " ✅ Вы записаны" if game_id in registered_game_ids else ""
+            builder.button(text=f"📆{display_game_date(date)} {display_name}{registered_mark}", callback_data=f"reg_{game_id}")
         builder.button(text="🔙В меню", callback_data="menu_back")
         builder.adjust(1)
 
@@ -2322,8 +2325,7 @@ async def menu_handler(message: types.Message, state: FSMContext):
             parse_mode="HTML"
         )
     elif message.text == "👥Список участников":
-        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
-        games = games[:5]
+        games = limit_registration_games(fetch_upcoming_games())
         if not games:
             await message.answer("К сожалению, на данный момент игр нет.", reply_markup=main_menu_keyboard(message.from_user.id))
             return
@@ -2952,7 +2954,7 @@ async def admin_announcement_games_handler(callback: types.CallbackQuery, state:
 @dp.message(Form.admin_reminder_audience)
 async def admin_reminder_audience_handler(message: types.Message, state: FSMContext):
     if message.text == "🔙Назад":
-        games = sort_games_by_date(filter_upcoming_games(execute_query("SELECT game_id, game_name, game_date FROM games WHERE is_deleted = FALSE", fetch=True)))
+        games = fetch_admin_games()
         if not games:
             await message.answer("Список игр пуст.", reply_markup=admin_menu_keyboard())
             await state.set_state(Form.admin_menu)
@@ -3404,11 +3406,13 @@ def vk_admin_participants_format_keyboard():
 
 def vk_games_keyboard(games, back_label: str = "🔙Назад"):
     keyboard = VkKeyboard(one_time=True)
-    for index, (game_id, game_name, game_date) in enumerate(games):
+    for index, game in enumerate(games):
+        game_id, game_name, game_date = game[:3]
+        registered = len(game) > 3 and game[3]
         if index > 0:
             keyboard.add_line()
         keyboard.add_button(
-            f"{display_game_date(game_date)} {game_name}",
+            f"{display_game_date(game_date)} {game_name}{' ✅ Вы записаны' if registered else ''}",
             color=VkKeyboardColor.SECONDARY,
             payload={"game_id": game_id}
         )
@@ -3756,7 +3760,7 @@ def send_vk_games_list(
         lines.append("")
         lines.append("Выбери игру кнопкой ниже или отправь её номер сообщением.")
         send_vk_message(vk_user_id, "\n".join(lines), vk_number_choice_keyboard(len(games), back_label=back_label))
-    set_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id), action, games=games)
+    set_vk_state(make_internal_user_id(PLATFORM_VK, vk_user_id), action, games=[game[:3] for game in games])
 
 
 def get_vk_selected_game(state, selected_text: str, payload: dict = None):
@@ -4126,7 +4130,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
                 vk_back_keyboard()
             )
         elif current == "admin_reminder_audience":
-            games = fetch_upcoming_games()
+            games = fetch_admin_games()
             set_vk_state(internal_user_id, "admin_reminder_game", reminder_games=games, reminder_game_ids=[])
             send_vk_message(vk_user_id, "Выбери одну или несколько игр:", vk_reminder_games_keyboard(games, []))
         elif current == "admin_reminder_custom_users":
@@ -4395,7 +4399,7 @@ async def handle_vk_admin_flow(internal_user_id: int, vk_user_id: int, text: str
             elif audience == "not_registered":
                 filter_type = "❌Только не записавшимся"
             set_vk_state(internal_user_id, "admin_broadcast_game", broadcast_filter_type=filter_type)
-            games = fetch_upcoming_games()
+            games = fetch_admin_games()
             send_vk_games_list(vk_user_id, games, "admin_broadcast_game", "Для какой игры отфильтровать аудиторию?", use_game_buttons=True)
             return True
         if normalized_text in {"👤Выбрать пользователей", "👤Выбор пользователей"} or audience == "custom":
@@ -4674,9 +4678,9 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if normalized_text == "📝Записаться на игру" or command == "register":
-        games = fetch_upcoming_games()
-        games = [game for game in games if not execute_query("SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s AND status='registered'", (internal_user_id, game[0]), fetchone=True)]
-        games = limit_registration_games(games, vk_user_id == VK_ADMIN_ID)
+        games = limit_registration_games(fetch_upcoming_games())
+        registered_ids = {game[0] for game in games if execute_query("SELECT 1 FROM registrations WHERE user_id=%s AND game_id=%s AND status='registered'", (internal_user_id, game[0]), fetchone=True)}
+        games = [(*game, game[0] in registered_ids) for game in games]
         send_vk_games_list(vk_user_id, games, "vk_register_select", "Выбери игру для записи:", use_game_buttons=True)
         return
 
@@ -4718,7 +4722,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if normalized_text == "👥Список участников" or command == "participants":
-        send_vk_games_list(vk_user_id, fetch_upcoming_games(), "vk_participants_select", "Выбери игру, список участников которой хочешь посмотреть:", use_game_buttons=True)
+        send_vk_games_list(vk_user_id, limit_registration_games(fetch_upcoming_games()), "vk_participants_select", "Выбери игру, список участников которой хочешь посмотреть:", use_game_buttons=True)
         return
 
     if normalized_text == "⏰Опоздаю" or command == "mark_late":
@@ -4825,7 +4829,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "❌Удалить игру" or command == "admin_delete_game"):
-        games = fetch_active_games()
+        games = fetch_admin_games()
         send_vk_games_list(vk_user_id, games, "admin_delete_game", "Какую игру удалить?", use_game_buttons=True)
         return
 
@@ -4836,17 +4840,17 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "🚫Отмена игры" or command == "admin_cancel_game"):
-        games = fetch_active_games()
+        games = fetch_admin_games()
         send_vk_games_list(vk_user_id, games, "admin_cancel_game", "Какую игру отменить?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "👥Список участников админ" or command == "admin_view_participants"):
-        games = fetch_active_games()
+        games = fetch_admin_games()
         send_vk_games_list(vk_user_id, games, "admin_view_participants", "Для какой игры показать список участников?", use_game_buttons=True)
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "🎙Назначить ведущего" or command == "admin_assign_host"):
-        games = fetch_active_games()
+        games = fetch_admin_games()
         send_vk_games_list(vk_user_id, games, "admin_assign_host_game", "Выберите игру:", use_game_buttons=True)
         return
 
@@ -4861,7 +4865,7 @@ async def handle_vk_message(vk_user_id: int, text: str, payload_raw=None):
         return
 
     if vk_user_id == VK_ADMIN_ID and (normalized_text == "🔔Напомнить об игре" or command == "admin_reminder"):
-        games = fetch_upcoming_games()
+        games = fetch_admin_games()
         if not games:
             send_vk_message(vk_user_id, "Список игр пуст.", vk_admin_menu_keyboard())
             return
