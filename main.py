@@ -1007,6 +1007,10 @@ async def is_game_full(game_id: int, game_name: str, user_id: int) -> bool:
     return len(registered_ids) >= limit
 
 WEEKDAY_GAME_RULES = "19:00 – сбор и объяснение правил\n19:30 – начало игр\n\n"
+WEEKDAY_SPORT_GAME_RULES = "19:30 – сбор игроков\n19:45 – начало игр\n\n"
+WEEKDAY_SPORT_BEGINNER_RULES = "19:00 – сбор игроков и объяснение правил\n19:30 – начало игр\n\n"
+WEEKEND_SPORT_GAME_RULES = "18:00 – сбор игроков\n18:15 – начало игр\n\n"
+WEEKEND_SPORT_BEGINNER_RULES = "17:30 – сбор игроков и объяснение правил\n18:00 – начало игр\n\n"
 
 
 def is_weekday_game(game_date: str) -> bool:
@@ -1029,16 +1033,18 @@ def get_game_rules(game_name: str, game_date: str = None):
                 f"{custom_times[0]} – сбор и объяснение правил\n"
                 f"{custom_times[1]} – начало игр\n\n"
             )
-    if is_weekday_game(game_date):
+    is_weekday = is_weekday_game(game_date)
+    if "Спортивная мафия для новичков" in game_name:
+        return WEEKDAY_SPORT_BEGINNER_RULES if is_weekday else WEEKEND_SPORT_BEGINNER_RULES
+    if "Спортивная мафия" in game_name:
+        return WEEKDAY_SPORT_GAME_RULES if is_weekday else WEEKEND_SPORT_GAME_RULES
+    if is_weekday:
         return WEEKDAY_GAME_RULES
 
-    sport_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     city_rules = "18:00 – сбор и объяснение правил\n18:30 – начало игр\n\n"
     rating_rules = "19:00 – начало игр\n\n"
 
-    if "Спортивная мафия" in game_name:
-        return sport_rules
-    elif "Рейтинговая игра" in game_name:
+    if "Рейтинговая игра" in game_name:
         return rating_rules
     elif "Городская мафия" in game_name:
         return city_rules
